@@ -8,7 +8,7 @@ import { cookies } from 'next/headers';
 
 export async function POST(
     request: Request,
-    { params }: { params: { platform: string } }
+    { params }: { params: Promise<{ platform: string }> }
 ) {
     const session = await getServerSession(authOptions);
     if (!session || !session.user) {

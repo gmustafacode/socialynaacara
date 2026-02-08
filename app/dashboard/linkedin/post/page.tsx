@@ -1,9 +1,9 @@
-
 "use client"
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, Suspense } from 'react'
 import {
     Send,
+    // ... (keep imports the same, I don't need to re-type them if I use context correctly, but replacing the top block is safest)
     Calendar,
     Youtube,
     Users,
@@ -100,7 +100,7 @@ const POST_CATEGORIES = [
     },
 ]
 
-export default function LinkedInPostPage() {
+function LinkedInPostContent() {
     const router = useRouter()
     const searchParams = useSearchParams()
     const [loading, setLoading] = useState(false)
@@ -771,5 +771,20 @@ export default function LinkedInPostPage() {
                 </div>
             </main>
         </div>
+    )
+}
+
+export default function LinkedInPostPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen bg-[#020202] text-white flex items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="size-12 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+                    <p className="text-white/40 text-[10px] font-black uppercase tracking-[0.2em] animate-pulse">Initializing Composer...</p>
+                </div>
+            </div>
+        }>
+            <LinkedInPostContent />
+        </Suspense>
     )
 }

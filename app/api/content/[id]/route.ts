@@ -5,13 +5,13 @@ import db from "@/lib/db"
 
 export async function DELETE(
     request: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const session = await getServerSession(authOptions)
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const userId = (session.user as any).id
-    const { id } = params
+    const { id } = await params
 
     try {
         // Verify ownership and delete
@@ -35,13 +35,13 @@ export async function DELETE(
 
 export async function PATCH(
     request: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const session = await getServerSession(authOptions)
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const userId = (session.user as any).id
-    const { id } = params
+    const { id } = await params
     const body = await request.json()
 
     try {
