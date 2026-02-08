@@ -1,0 +1,222 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id             String          @id @default(uuid())
+  name           String?
+  email          String          @unique
+  password       String?
+  emailVerified  DateTime?
+  image          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  accounts       Account[]
+  aiLogs         AiLog[]
+  contentQueue   ContentQueue[]
+  linkedinPosts  LinkedInPost[]
+  postHistory    PostHistory[]
+  preferences    Preference?
+  scheduledPosts ScheduledPost[]
+  sessions       Session[]
+  socialAccounts SocialAccount[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model SocialAccount {
+  id                    String          @id @default(uuid())
+  userId                String
+  platform              String
+  platformAccountId     String?
+  encryptedAccessToken  String?
+  encryptedRefreshToken String?
+  encryptedClientId     String?
+  encryptedClientSecret String?
+  customRedirectUri     String?
+  scopes                String?
+  metadata              String?
+  status                String          @default("active")
+  connectedAt           DateTime        @default(now())
+  lastVerifiedAt        DateTime?
+  capabilities          Json?
+  updatedAt             DateTime        @updatedAt
+  accessTokenExpiresAt  DateTime?       @map("access_token_expires_at")
+  linkedinPosts         LinkedInPost[]
+  scheduledPosts        ScheduledPost[]
+  user                  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform], name: "user_platform_unique")
+  @@unique([platform, platformAccountId], name: "platform_platformAccountId")
+  @@index([userId])
+  @@index([platform])
+  @@index([status])
+  @@map("social_accounts")
+}
+
+model Preference {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  preferredContentTypes String?
+  postingSchedule       String?
+  notificationsEnabled  Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("preferences")
+}
+
+model ContentQueue {
+  id          String        @id @default(uuid())
+  userId      String?       @map("user_id")
+  source      String
+  contentType String        @map("content_type")
+  title       String?
+  summary     String?
+  rawContent  String?       @map("raw_content")
+  mediaUrl    String?       @map("media_url")
+  sourceUrl   String?       @map("source_url")
+  language    String        @default("en")
+  status      String        @default("pending")
+  viralScore  Int           @default(0) @map("viral_score")
+  fetchedAt   DateTime      @default(now()) @map("fetched_at")
+  scheduledAt DateTime?     @map("scheduled_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+  user        User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postHistory PostHistory[]
+
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("content_queue")
+}
+
+model PostHistory {
+  id                String        @id @default(uuid())
+  userId            String
+  platform          String
+  contentId         String?
+  postId            String?
+  engagementMetrics String?
+  status            String
+  postedAt          DateTime      @default(now())
+  content           ContentQueue? @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("post_history")
+}
+
+model AiLog {
+  id            String   @id @default(uuid())
+  userId        String
+  agentName     String
+  action        String
+  outputSummary String?
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_logs")
+}
+
+model ScheduledPost {
+  id              String        @id @default(uuid())
+  userId          String
+  socialAccountId String
+  platform        String
+  postType        String
+  contentText     String
+  mediaUrl        String?
+  targetType      String
+  targetId        String?
+  scheduledAt     DateTime?
+  status          String
+  externalPostId  String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  socialAccount   SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("scheduled_posts")
+}
+
+model LinkedInPost {
+  id                    String        @id @default(uuid())
+  userId                String
+  socialAccountId       String
+  postType              String        @default("TEXT")
+  youtubeUrl            String?
+  title                 String?
+  description           String        @default("")
+  thumbnailUrl          String?
+  mediaUrls             String[]      @default([])
+  targetType            String
+  groupIds              String[]
+  visibility            String        @default("PUBLIC")
+  status                String        @default("DRAFT")
+  encryptedAccessToken  String?       @map("encrypted_access_token")
+  encryptedRefreshToken String?       @map("encrypted_refresh_token")
+  encryptedClientId     String?       @map("encrypted_client_id")
+  encryptedClientSecret String?       @map("encrypted_client_secret")
+  accessTokenExpiresAt  DateTime?     @map("access_token_expires_at")
+  linkedinPostUrn       String?
+  errorMessage          String?
+  scheduledAt           DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  socialAccount         SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("linkedin_posts")
+}
