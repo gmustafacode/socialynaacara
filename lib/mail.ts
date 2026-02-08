@@ -12,7 +12,7 @@ export async function sendVerificationEmail(email: string, token: string) {
     const { data, error } = await resend.emails.send({
       from: 'onboarding@resend.dev', // Default sender for unverified domains
       //  dont change the email for now 
-      to: email,
+      to: 'ghulammustafa000413@gmail.com', // email,
       subject: 'Verify your email - Socialyncara',
       html: `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; background-color: #f9f9f9;">
