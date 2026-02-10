@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { getProviderConfig } from "@/lib/oauth";
 import crypto from 'crypto';
 import { cookies } from 'next/headers';
+import { getBaseUrl } from '@/lib/utils';
 
 export async function POST(
     request: Request,
@@ -84,7 +85,7 @@ export async function POST(
 
     const paramsObj = new URLSearchParams({
         client_id: customClientId,
-        redirect_uri: customRedirectUri || `${process.env.NEXTAUTH_URL}/api/oauth/callback`,
+        redirect_uri: customRedirectUri || `${getBaseUrl()}/api/oauth/callback`,
         response_type: 'code',
         scope: config.scopes.join(' '),
         state: state,

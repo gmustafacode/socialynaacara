@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react'
 import { X, Search, Book, Shield, Code, AlertCircle, CheckCircle, ChevronRight, ExternalLink } from 'lucide-react'
+import { getBaseUrl } from '@/lib/utils'
 import {
     Dialog,
     DialogContent,
@@ -220,7 +221,7 @@ function SetupGuideContent() {
                         <li>Go to the <strong className="text-white">"Auth"</strong> tab in your app</li>
                         <li>Copy your <strong className="text-white">Client ID</strong></li>
                         <li>Generate and copy your <strong className="text-white">Client Secret</strong></li>
-                        <li>Add redirect URL: <code className="bg-white/10 px-2 py-1 rounded text-blue-400">https://socialyncara.vercel.app/api/oauth/callback</code></li>
+                        <li>Add redirect URL: <code className="bg-white/10 px-2 py-1 rounded text-blue-400">{getBaseUrl()}/api/oauth/callback</code></li>
                     </ol>
                 </Step>
 
@@ -328,7 +329,7 @@ function CredentialsContent() {
                 <CredentialCard
                     name="Redirect URI"
                     description="URL where LinkedIn sends users after authorization"
-                    example="https://socialyncara.vercel.app/api/oauth/callback"
+                    example={`${getBaseUrl()}/api/oauth/callback`}
                     howToFind="Auto-filled in SocialyNikara - must match exactly in LinkedIn app settings"
                 />
             </div>
@@ -387,7 +388,7 @@ function TroubleshootingContent() {
                     cause="The redirect URI doesn't match what's configured in your LinkedIn app"
                     solution={[
                         "Go to LinkedIn Developer Portal → Your App → Auth tab",
-                        "Verify 'https://socialyncara.vercel.app/api/oauth/callback' is in 'Authorized redirect URLs'",
+                        `Verify '${getBaseUrl()}/api/oauth/callback' is in 'Authorized redirect URLs'`,
                         "Check for trailing slashes (should NOT have one)",
                         "Ensure correct protocol (http for localhost, https for production)",
                         "Update and save if needed"

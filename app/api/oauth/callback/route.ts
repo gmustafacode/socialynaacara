@@ -7,6 +7,7 @@ import { encrypt } from "@/lib/encryption";
 import db from "@/lib/db";
 import { cookies } from 'next/headers';
 import { PlatformGuard } from "@/lib/platform-guard";
+import { getBaseUrl } from "@/lib/utils";
 
 export async function GET(request: Request) {
     const session = await getServerSession(authOptions);
@@ -20,7 +21,7 @@ export async function GET(request: Request) {
     const error = searchParams.get('error');
 
     if (error) {
-        return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard/connect?error=${error}`);
+        return NextResponse.redirect(`${getBaseUrl()}/dashboard/connect?error=${error}`);
     }
 
     // 1. Verify state
@@ -96,7 +97,7 @@ export async function GET(request: Request) {
 
     // 2. Exchange code for tokens
     try {
-        const redirectUri = customRedirect || `${process.env.NEXTAUTH_URL}/api/oauth/callback`;
+        const redirectUri = customRedirect || `${getBaseUrl()}/api/oauth/callback`;
         console.log(`[OAuth Debug] Exchanging code for ${platform}. ClientID prefix: ${config.clientId?.substring(0, 5)}... RedirectURI: ${redirectUri}`);
 
         const tokenResponse = await fetch(config.tokenUrl, {
@@ -125,7 +126,7 @@ export async function GET(request: Request) {
         if (!guardCheck.allowed) {
             console.warn(`[OAuth] Platform attachment blocked for user ${userId}, platform ${platform}:`, guardCheck.reason);
             return NextResponse.redirect(
-                `${process.env.NEXTAUTH_URL}/dashboard/connect?error=platform_already_connected&platform=${platform}&message=${encodeURIComponent(guardCheck.reason || '')}`
+                `${getBaseUrl()}/dashboard/connect?error=platform_already_connected&platform=${platform}&message=${encodeURIComponent(guardCheck.reason || '')}`
             );
         }
 
@@ -281,7 +282,7 @@ export async function GET(request: Request) {
             });
         }
 
-        return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard/connect?success=true&platform=${platform}`);
+        return NextResponse.redirect(`${getBaseUrl()}/dashboard/connect?success=true&platform=${platform}`);
 
     } catch (e) {
         console.error("OAuth callback error:", e);

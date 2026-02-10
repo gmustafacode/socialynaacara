@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { Search, Book, Shield, Code, AlertCircle, CheckCircle, ChevronRight, ExternalLink, ArrowLeft, Home } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { getBaseUrl } from '@/lib/utils'
 import Link from 'next/link'
 
 export default function LinkedInDocumentationPage() {
@@ -272,7 +273,7 @@ export default function LinkedInDocumentationPage() {
                                                     <li>Go to the <strong className="text-white">"Auth"</strong> tab in your app</li>
                                                     <li>Copy your <strong className="text-white">Client ID</strong></li>
                                                     <li>Generate and copy your <strong className="text-white">Client Secret</strong></li>
-                                                    <li>Add redirect URL: <code className="bg-black/40 px-2 py-1 rounded text-blue-400 font-mono text-xs">https://socialyncara.vercel.app/api/oauth/callback</code></li>
+                                                    <li>Add redirect URL: <code className="bg-black/40 px-2 py-1 rounded text-blue-400 font-mono text-xs">{getBaseUrl()}/api/oauth/callback</code></li>
                                                 </ol>
                                             </div>
                                         </div>
@@ -421,7 +422,7 @@ export default function LinkedInDocumentationPage() {
                                         <p className="text-sm text-white/70 mb-3">URL where LinkedIn sends users after authorization</p>
                                         <div className="bg-black/30 rounded p-3 mb-3">
                                             <p className="text-xs text-white/50 mb-1">Example:</p>
-                                            <code className="text-sm font-mono text-green-400">https://socialyncara.vercel.app/api/oauth/callback</code>
+                                            <code className="text-sm font-mono text-green-400">{getBaseUrl()}/api/oauth/callback</code>
                                         </div>
                                         <p className="text-xs text-white/50">
                                             <strong className="text-white">How to find:</strong> Auto-filled in SocialyNikara - must match exactly in LinkedIn app settings
@@ -501,7 +502,7 @@ export default function LinkedInDocumentationPage() {
                                             <p className="text-xs font-bold text-white mb-2">Solution:</p>
                                             <ol className="list-decimal list-inside space-y-1 text-sm text-white/70">
                                                 <li>Go to LinkedIn Developer Portal → Your App → Auth tab</li>
-                                                <li>Verify 'https://socialyncara.vercel.app/api/oauth/callback' is in 'Authorized redirect URLs'</li>
+                                                <li>Verify '{getBaseUrl()}/api/oauth/callback' is in 'Authorized redirect URLs'</li>
                                                 <li>Check for trailing slashes (should NOT have one)</li>
                                                 <li>Ensure correct protocol (http for localhost, https for production)</li>
                                                 <li>Update and save if needed</li>

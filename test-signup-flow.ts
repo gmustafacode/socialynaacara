@@ -14,7 +14,7 @@ async function testSignupFlow() {
     try {
         // 1. Call Signup API
         console.log('Step 1: Calling signup API...');
-        const response = await fetch('https://socialyncara.vercel.app/api/auth/signup', {
+        const response = await fetch('http://localhost:3000/api/auth/signup', {
             method: 'POST',
             body: JSON.stringify({ email, password, name }),
             headers: { 'Content-Type': 'application/json' }
@@ -53,7 +53,7 @@ async function testSignupFlow() {
 
         // 3. Test verification link (optional, but good)
         console.log('\nStep 3: Verification link would be:');
-        console.log(`https://socialyncara.vercel.app/api/auth/verify?token=${token.token}`);
+        console.log(`http://localhost:3000/api/auth/verify?token=${token.token}`);
 
         console.log('\n--- Full Signup Flow Test Passed! ---');
 

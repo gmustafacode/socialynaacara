@@ -41,7 +41,7 @@ export function LinkedInConnectModal({ isOpen, onClose }: LinkedInConnectModalPr
         if (typeof window !== 'undefined') {
             setFormData(prev => ({
                 ...prev,
-                redirectUri: `https://socialyncara.vercel.app/api/oauth/callback`
+                redirectUri: `${window.location.host.includes('localhost') ? 'http' : 'https'}://${window.location.host}/api/oauth/callback`
             }))
         }
     }, [])

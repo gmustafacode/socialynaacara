@@ -16,7 +16,7 @@ export async function sendVerificationEmail(email: string, token: string) {
       subject: 'Verify your email - Socialyncara',
       html: `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; background-color: #f9f9f9;">
-          <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #e1e4e8;">
+          <div style="max-width: 600px; margin: i0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid #e1e4e8;">
             <div style="background-color: #7c3aed; padding: 30px; text-align: center;">
               <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: -0.5px;">Socialyncara</h1>
             </div>

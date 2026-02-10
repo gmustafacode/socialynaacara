@@ -165,8 +165,8 @@ GitHubProvider({
 
 1. **Create GitHub OAuth App**
    - Go to: https://github.com/settings/developers
-   - **Homepage URL**: `https://socialyncara.vercel.app`
-   - **Callback URL**: `https://socialyncara.vercel.app/api/auth/callback/github`
+   - Create new OAuth App
+   - Set callback URL: `http://localhost:3000/api/auth/callback/github`
 
 2. **Update `.env` File**
    - Add your actual `GITHUB_CLIENT_ID`
@@ -178,7 +178,7 @@ GitHubProvider({
    ```
 
 4. **Test Login**
-   - Navigate to: https://socialyncara.vercel.app/login
+   - Navigate to: http://localhost:3000/login
    - Click "GitHub" button
    - Authorize application
    - Verify redirect to dashboard
@@ -217,7 +217,7 @@ GitHubProvider({
 
 ### Production Callback URL:
 ```
-https://socialyncara.vercel.app/api/auth/callback/github
+https://yourdomain.com/api/auth/callback/github
 ```
 
 ---

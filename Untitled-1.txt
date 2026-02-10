@@ -1,0 +1,13 @@
+# Socialyncara | AI Social Manager
+
+[Features](https://socialyncara.vercel.app/#features)
+[Pricing](https://socialyncara.vercel.app/#pricing)
+[About](https://socialyncara.vercel.app/#about)
+[Login](https://socialyncara.vercel.app/login)
+[Get Started](https://socialyncara.vercel.app/signup)
+
+# Architect Your Social Presence
+The next-generation AI command center for LinkedIn, X, Instagram, and more. Automate with precision, secure with AES-256.
+[Launch Dashboard](https://socialyncara.vercel.app/dashboard)
+[Start Building Free](https://socialyncara.vercel.app/signup)
+© 2026 Socialyncara. All rights reserved.

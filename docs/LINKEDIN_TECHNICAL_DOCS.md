@@ -138,7 +138,7 @@ Initiates LinkedIn OAuth flow with custom credentials.
 {
   "clientId": "7764u9ak5vvmvq",
   "clientSecret": "YOUR_CLIENT_SECRET",
-  "redirectUri": "https://socialyncara.vercel.app/api/oauth/callback",
+  "redirectUri": "http://localhost:3000/api/oauth/callback",
   "scopes": ["openid", "profile", "email", "w_member_social"]
 }
 ```

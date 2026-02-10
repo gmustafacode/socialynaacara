@@ -18,9 +18,9 @@ Fill in the following details:
 | Field | Value |
 |-------|-------|
 | **Application name** | SocialSyncAra (or your preferred name) |
-| **Homepage URL** | `https://socialyncara.vercel.app` |
+| **Homepage URL** | `http://localhost:3000` |
 | **Application description** | Social media automation platform (optional) |
-| **Authorization callback URL** | `https://socialyncara.vercel.app/api/auth/callback/github` |
+| **Authorization callback URL** | `http://localhost:3000/api/auth/callback/github` |
 
 > **Important**: The callback URL must match exactly. NextAuth.js automatically handles the `/api/auth/callback/github` route.
 
@@ -53,7 +53,7 @@ GITHUB_CLIENT_SECRET="your_actual_github_client_secret_here"
 Ensure these are also set:
 
 ```env
-NEXTAUTH_URL="https://socialyncara.vercel.app"
+NEXTAUTH_URL="http://localhost:3000"
 NEXTAUTH_SECRET="your-nextauth-secret"
 ```
 
@@ -74,7 +74,7 @@ NEXTAUTH_SECRET="your-nextauth-secret"
    - Clicks "Authorize application"
 
 3. **GitHub Redirects Back**
-   - Callback URL: `https://socialyncara.vercel.app/api/auth/callback/github`
+   - Callback URL: `http://localhost:3000/api/auth/callback/github`
    - Includes authorization code in query params
 
 4. **Backend Exchanges Code for Token**
@@ -146,7 +146,7 @@ These are the **minimum required scopes** for authentication.
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `redirect_uri_mismatch` | Callback URL doesn't match GitHub settings | Verify callback URL is exactly `https://socialyncara.vercel.app/api/auth/callback/github` |
+| `redirect_uri_mismatch` | Callback URL doesn't match GitHub settings | Verify callback URL is exactly `http://localhost:3000/api/auth/callback/github` |
 | `invalid_client` | Wrong client ID or secret | Double-check credentials in `.env` |
 | `User cancelled authorization` | User clicked "Cancel" on GitHub | User-friendly message shown, no action needed |
 | `Missing email` | GitHub account has no public email | Request `user:email` scope (already configured) |
@@ -166,7 +166,7 @@ npm run dev
 ### Step 8.2: Navigate to Login Page
 Open your browser and go to:
 ```
-https://socialyncara.vercel.app/login
+http://localhost:3000/login
 ```
 
 ### Step 8.3: Click "GitHub" Button
@@ -177,7 +177,7 @@ https://socialyncara.vercel.app/login
 ### Step 8.4: Verify Dashboard Access
 After successful login, you should be redirected to:
 ```
-https://socialyncara.vercel.app/dashboard
+http://localhost:3000/dashboard
 ```
 
 ---
@@ -190,17 +190,17 @@ When deploying to production, update your GitHub OAuth app:
 1. Go to your GitHub OAuth app settings
 2. Update **Homepage URL** to your production domain:
    ```
-   https://socialyncara.vercel.app
+   https://yourdomain.com
    ```
 3. Update **Authorization callback URL**:
    ```
-   https://socialyncara.vercel.app/api/auth/callback/github
+   https://yourdomain.com/api/auth/callback/github
    ```
 
 ### Update Environment Variables
 In your production environment, set:
 ```env
-NEXTAUTH_URL="https://socialyncara.vercel.app"
+NEXTAUTH_URL="https://yourdomain.com"
 ```
 
 > **Important**: You can have multiple callback URLs by creating separate OAuth apps for development and production.
