@@ -121,10 +121,13 @@ model ContentQueue {
   summary     String?
   rawContent  String?       @map("raw_content")
   mediaUrl    String?       @map("media_url")
-  sourceUrl   String?       @map("source_url")
+  sourceUrl   String?       @unique @map("source_url")
+  author      String?
   language    String        @default("en")
   status      String        @default("pending")
   viralScore  Int           @default(0) @map("viral_score")
+  metadata    Json?
+  publishedAt DateTime?     @map("published_at")
   fetchedAt   DateTime      @default(now()) @map("fetched_at")
   scheduledAt DateTime?     @map("scheduled_at")
   createdAt   DateTime      @default(now()) @map("created_at")
@@ -219,4 +222,18 @@ model LinkedInPost {
   @@index([status])
   @@index([scheduledAt])
   @@map("linkedin_posts")
+}
+
+model IngestionLog {
+  id             String   @id @default(uuid())
+  source         String
+  fetchedCount   Int      @default(0) @map("fetched_count")
+  savedCount     Int      @default(0) @map("saved_count")
+  duplicateCount Int      @default(0) @map("duplicate_count")
+  errorCount     Int      @default(0) @map("error_count")
+  executionTime  Int      @default(0) @map("execution_time")
+  errorMessage   String?  @map("error_message")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("ingestion_logs")
 }

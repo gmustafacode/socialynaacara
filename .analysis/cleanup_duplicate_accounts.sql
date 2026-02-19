@@ -1,7 +1,6 @@
 -- Migration: Enforce One Account Per Platform Per User
 -- This migration adds a unique constraint to prevent users from connecting
--- multiple accounts of the same platform (e.g., multiple LinkedIn accounts)
-
+-- multiple accounts of the same platform (e.g., multiple LinkedIn accounts
 -- Step 1: Identify and log duplicate accounts
 -- (Run this query first to see what will be affected)
 SELECT 

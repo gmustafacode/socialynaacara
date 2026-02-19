@@ -126,7 +126,10 @@ export async function POST(req: Request) {
                 try {
                     await fetch(process.env.N8N_PUBLISH_WEBHOOK_URL, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-webhook-secret': process.env.WEBHOOK_SECRET || ''
+                        },
                         body: JSON.stringify({
                             postId: post.id,
                             accessToken,
@@ -137,7 +140,8 @@ export async function POST(req: Request) {
                             targetId: post.targetId,
                             authorUrn: account.platformAccountId, // Added authorUrn
                             callbackUrl: `${getBaseUrl()}/api/posts/update-status`
-                        })
+                        }),
+                        signal: AbortSignal.timeout(10000)
                     });
                 } catch (e) {
                     console.error("Failed to trigger n8n webhook", e);

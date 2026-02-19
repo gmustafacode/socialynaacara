@@ -4,6 +4,13 @@ import db from "@/lib/db";
 
 export async function POST(req: Request) {
     try {
+        // 1. Security Check: Verify secret if defined
+        const secret = req.headers.get('x-webhook-secret');
+        if (process.env.WEBHOOK_SECRET && secret !== process.env.WEBHOOK_SECRET) {
+            console.warn("[Security] Unauthorized attempt to update post status from", req.headers.get('x-forwarded-for') || 'unknown');
+            return new NextResponse("Unauthorized secret mismatch", { status: 401 });
+        }
+
         const body = await req.json();
         const { postId, status, externalPostId, error } = body;
 

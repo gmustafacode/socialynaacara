@@ -197,6 +197,7 @@ export async function refreshAccessToken(accountId: string) {
                 refresh_token: refreshToken,
                 grant_type: 'refresh_token',
             }),
+            signal: AbortSignal.timeout(20000) // 20s timeout
         });
 
         const data = await response.json();

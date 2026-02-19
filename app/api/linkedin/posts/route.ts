@@ -160,24 +160,26 @@ export async function POST(request: Request) {
             }
         });
 
-        // 5. Hand-off to Inngest for Background Processing
-        const eventName = scheduledAt ? "linkedin/post.schedule" : "linkedin/post.publish";
-        const eventData = scheduledAt ? { postId: post.id, scheduledAt: post.scheduledAt } : { postId: post.id };
 
-        try {
-            await inngest.send({
-                name: eventName,
-                data: eventData
-            });
-        } catch (inngestError: any) {
-            console.error("[LinkedIn API] Inngest dispatch failed:", inngestError);
-            // Revert status to FAILED since it didn't hit the background engine
-            await db.linkedInPost.update({
-                where: { id: post.id },
-                data: { status: 'FAILED', errorMessage: `Background dispatch failed: ${inngestError.message}` }
-            });
-            return NextResponse.json({ error: "Failed to dispatch post to background engine" }, { status: 503 });
+        // 5. Hand-off to Inngest for Background Processing (Only for immediate posts)
+        // Scheduled posts are handled by the internal automation-worker.ts
+        if (!scheduledAt) {
+            try {
+                await inngest.send({
+                    name: "linkedin/post.publish",
+                    data: { postId: post.id }
+                });
+            } catch (inngestError: any) {
+                console.error("[LinkedIn API] Inngest dispatch failed:", inngestError);
+                // Revert status to FAILED since it didn't hit the background engine
+                await db.linkedInPost.update({
+                    where: { id: post.id },
+                    data: { status: 'FAILED', errorMessage: `Background dispatch failed: ${inngestError.message}` }
+                });
+                return NextResponse.json({ error: "Failed to dispatch post to background engine" }, { status: 503 });
+            }
         }
+
 
         return NextResponse.json({
             success: true,

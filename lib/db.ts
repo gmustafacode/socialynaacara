@@ -22,7 +22,7 @@ const getModels = (obj: any) => {
     return Array.from(props).filter(p => !p.startsWith('_') && !p.startsWith('$') && p !== 'constructor');
 };
 
-console.log("DB Models Available:", getModels(db));
+// console.log("DB Models Available:", getModels(db));
 
 export default db
 

@@ -37,7 +37,8 @@ export async function checkLinkedInCapabilities(
         headers: {
             'Authorization': `Bearer ${accessToken}`,
             'X-Restli-Protocol-Version': '2.0.0'
-        }
+        },
+        signal: AbortSignal.timeout(15000)
     });
 
     if (profileResponse.ok) {
@@ -47,7 +48,8 @@ export async function checkLinkedInCapabilities(
         const oidcResponse = await fetch('https://api.linkedin.com/v2/userinfo', {
             headers: {
                 'Authorization': `Bearer ${accessToken}`
-            }
+            },
+            signal: AbortSignal.timeout(15000)
         });
         if (oidcResponse.ok) {
             profileOk = true;
@@ -111,7 +113,8 @@ export async function checkLinkedInCapabilities(
         headers: {
             'Authorization': `Bearer ${accessToken}`,
             'X-Restli-Protocol-Version': '2.0.0'
-        }
+        },
+        signal: AbortSignal.timeout(15000)
     });
 
     if (adminResponse.ok) {

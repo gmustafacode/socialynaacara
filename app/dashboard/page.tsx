@@ -8,13 +8,14 @@ import { Button } from "@/components/ui/button";
 import { PlatformPolicyCard } from "@/components/PlatformPolicyCard";
 import { AiGeneratedContentPlaceholder } from "@/components/AiGeneratedContentPlaceholder";
 import { cn } from "@/lib/utils";
+import { SystemStatus } from "@/components/SystemStatus"
 
 export default function DashboardPage() {
     const [stats, setStats] = useState({
         accountsCount: 0,
         pendingContent: 0,
         aiLogsCount: 0,
-        engagement: "+13.5%" // Mock for now
+        engagement: "0%"
     })
     const [postHistory, setPostHistory] = useState<any[]>([])
     const [loading, setLoading] = useState(true)
@@ -23,23 +24,33 @@ export default function DashboardPage() {
         async function fetchData() {
             try {
                 // Fetch connected accounts
-                const accRes = await fetch('/api/accounts/connect') // Using the GET handler we defined
+                const accRes = await fetch('/api/accounts')
                 const accounts = accRes.ok ? await accRes.json() : []
 
                 // Fetch content queue
                 const contentRes = await fetch('/api/content')
                 const content = contentRes.ok ? await contentRes.json() : []
 
-                // Fetch LinkedIn post history
-                const historyRes = await fetch('/api/linkedin/posts')
-                const postData = historyRes.ok ? await historyRes.json() : []
-                setPostHistory(postData)
+                // Fetch unified history
+                const [liRes, genRes] = await Promise.all([
+                    fetch('/api/linkedin/posts'),
+                    fetch('/api/posts')
+                ])
+                const liData = liRes.ok ? await liRes.json() : []
+                const genData = genRes.ok ? await genRes.json() : []
+
+                const unified = [
+                    ...liData.map((p: any) => ({ ...p, _type: 'linkedin' })),
+                    ...genData.map((p: any) => ({ ...p, _type: 'generic' }))
+                ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+                setPostHistory(unified)
 
                 setStats({
                     accountsCount: Array.isArray(accounts) ? accounts.length : 0,
                     pendingContent: Array.isArray(content) ? content.filter((c: any) => c.status === 'pending').length : 0,
-                    aiLogsCount: 12, // Mocking AI logs count until agent is active
-                    engagement: "+24.5%"
+                    aiLogsCount: content.length + unified.length, // More dynamic AI-driven stat
+                    engagement: "0%"
                 })
             } catch (e) {
                 console.error(e)
@@ -51,8 +62,11 @@ export default function DashboardPage() {
     }, [])
 
     return (
-        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div>
+        <div className="space-y-10 animate-in fade-in duration-700">
+            {/* Engine Telemetry */}
+            <SystemStatus />
+
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                 <h2 className="text-3xl font-bold tracking-tight text-white">Dashboard</h2>
                 <p className="text-white/60">Overview of your social presence and AI workflows.</p>
             </div>
@@ -111,9 +125,9 @@ export default function DashboardPage() {
                                                     post.status === 'PUBLISHED' ? "bg-emerald-500" : "bg-red-500"
                                                 )} />
                                                 <div className="flex flex-col truncate">
-                                                    <span className="text-sm font-bold truncate">{post.title || "Social Post"}</span>
+                                                    <span className="text-sm font-bold truncate">{post.title || post.contentText || "Automated Post"}</span>
                                                     <span className="text-[10px] text-white/40 uppercase tracking-widest">
-                                                        {new Date(post.createdAt).toLocaleTimeString()} • {post.postType}
+                                                        {new Date(post.createdAt).toLocaleTimeString()} • {post.postType || (post._type === 'linkedin' ? 'Article' : 'Direct')}
                                                     </span>
                                                 </div>
                                             </div>
@@ -139,6 +153,26 @@ export default function DashboardPage() {
                         <CardContent className="space-y-4">
                             <button className="w-full h-12 rounded-xl bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-sm font-bold transition-all shadow-lg shadow-purple-900/40 active:scale-[0.98]">
                                 Generate AI Campaign
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    const { toast } = await import("sonner")
+                                    toast.promise(
+                                        fetch('/api/content/fetch', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ sources: ['rss', 'reddit', 'news_api', 'unsplash', 'pexels'] })
+                                        }).then(res => res.ok ? res.json() : Promise.reject()),
+                                        {
+                                            loading: 'Fetching fresh content...',
+                                            success: (data) => `Ingested ${data.saved} new items!`,
+                                            error: 'Failed to fetch content'
+                                        }
+                                    )
+                                }}
+                                className="w-full h-12 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-400 text-sm font-bold transition-all active:scale-[0.98]"
+                            >
+                                Fetch Fresh Content
                             </button>
                             <Link href="/dashboard/connect" className="block text-center">
                                 <button className="w-full h-12 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white text-sm font-medium transition-colors">

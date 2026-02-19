@@ -11,10 +11,20 @@ export async function GET(request: Request) {
 
     try {
         const queue = await db.contentQueue.findMany({
-            where: { userId },
-            orderBy: { createdAt: 'desc' },
+            where: {
+                OR: [
+                    { userId },
+                    { userId: null }
+                ]
+            },
+            orderBy: [
+                { viralScore: 'desc' },
+                { createdAt: 'desc' }
+            ],
             include: {
-                postHistory: true // Include history just in case
+                postHistory: {
+                    where: { userId } // Only show history relative to this user
+                }
             }
         })
         return NextResponse.json(queue)
@@ -31,6 +41,13 @@ export async function POST(request: Request) {
         const body = await request.json()
         const { contentType, contentData, viralScore, source, sourceUrl, mediaUrl } = body
         const userId = (session.user as any).id
+
+        if (sourceUrl) {
+            const existing = await db.contentQueue.findUnique({ where: { sourceUrl } });
+            if (existing) {
+                return NextResponse.json({ error: "Content already exists in queue" }, { status: 409 });
+            }
+        }
 
         const item = await db.contentQueue.create({
             data: {

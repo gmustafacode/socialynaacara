@@ -34,21 +34,36 @@ export default function QueuePage() {
     const fetchData = async () => {
         setLoading(true)
         try {
-            // Fetch content queue
+            // 1. Fetch content queue
             const queueRes = await fetch('/api/content')
             if (queueRes.ok) {
                 const queueData = await queueRes.json()
                 setQueue(queueData)
             }
 
-            // Fetch LinkedIn post history
+            // 2. Fetch LinkedIn post history
             const historyRes = await fetch('/api/linkedin/posts')
-            if (historyRes.ok) {
-                const historyData = await historyRes.json()
-                setHistory(historyData)
-            }
+            const historyData = historyRes.ok ? await historyRes.json() : []
+
+            // 3. Fetch Generic/Cross-platform post history
+            const genericRes = await fetch('/api/posts')
+            const genericData = genericRes.ok ? await genericRes.json() : []
+
+            // 4. Unify and Sort
+            const combinedHistory = [
+                ...historyData.map((p: any) => ({ ...p, _type: 'linkedin' })),
+                ...genericData.map((p: any) => ({
+                    ...p,
+                    _type: 'generic',
+                    // Map generic fields to common display fields if needed
+                    description: p.contentText,
+                    postType: p.postType
+                }))
+            ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+            setHistory(combinedHistory)
         } catch (error) {
-            toast.error("Failed to sync content data")
+            toast.error("Failed to sync engine data")
         } finally {
             setLoading(false)
         }
@@ -209,10 +224,20 @@ export default function QueuePage() {
 
                                         <div className="flex flex-col md:items-end justify-between self-stretch gap-4">
                                             <div className="flex items-center gap-2">
-                                                <div className="size-8 rounded-full bg-blue-600/10 flex items-center justify-center border border-blue-500/20">
-                                                    <span className="text-[10px] font-black text-blue-400">IN</span>
+                                                <div className={cn(
+                                                    "size-8 rounded-full flex items-center justify-center border",
+                                                    post._type === 'linkedin' ? "bg-blue-600/10 border-blue-500/20" : "bg-purple-600/10 border-purple-500/20"
+                                                )}>
+                                                    <span className={cn(
+                                                        "text-[10px] font-black uppercase",
+                                                        post._type === 'linkedin' ? "text-blue-400" : "text-purple-400"
+                                                    )}>
+                                                        {post.platform?.substring(0, 2) || (post._type === 'linkedin' ? 'LI' : 'GP')}
+                                                    </span>
                                                 </div>
-                                                <span className="text-xs font-black text-white/60">{post.socialAccount?.metadata?.username || "LinkedIn User"}</span>
+                                                <span className="text-xs font-black text-white/60">
+                                                    {post.socialAccount?.metadata?.name || post.socialAccount?.metadata?.username || post.platform || "Platform User"}
+                                                </span>
                                             </div>
 
                                             <div className="flex items-center gap-2">

@@ -241,18 +241,20 @@ export class LinkedInPostingService {
             // Process images: Download and upload to LinkedIn to get Asset URNs
             const mediaSources = isImage ? (mediaUrls || []) : [thumbnailUrl];
 
-            const assetPromises = mediaSources.map(async (url) => {
-                if (!url) return null;
-                if (url.startsWith('urn:li:digitalmediaAsset')) return url;
-                try {
-                    return await this.uploadImageToLinkedIn(accessToken, authorUrn, url);
-                } catch (e) {
-                    console.error("[LinkedInPosting] Image upload failed:", e);
-                    return null;
+            const assets: string[] = [];
+            for (const url of mediaSources) {
+                if (!url) continue;
+                if (url.startsWith('urn:li:digitalmediaAsset')) {
+                    assets.push(url);
+                    continue;
                 }
-            });
-
-            const assets = (await Promise.all(assetPromises)).filter(Boolean) as string[];
+                try {
+                    const assetUrn = await this.uploadImageToLinkedIn(accessToken, authorUrn, url);
+                    if (assetUrn) assets.push(assetUrn);
+                } catch (e) {
+                    console.error("[LinkedInPosting] Image upload failed for URL:", url, e);
+                }
+            }
 
             if (assets.length > 0) {
                 media = assets.map(assetUrn => ({

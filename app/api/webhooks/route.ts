@@ -7,8 +7,16 @@ export async function POST(request: Request) {
     const payload = await request.text();
     const signature = request.headers.get('x-hub-signature-256') || request.headers.get('x-twitter-webhook-signature');
 
-    // Production security: Verify signatures
-    // if (!verifySignature(payload, signature)) return new Response('Unauthorized', { status: 401 });
+    // Production security: Verify secret
+    const authHeader = request.headers.get('Authorization');
+    const webhookSecret = process.env.WEBHOOK_SECRET;
+
+    // If a secret is configured, we enforce it. 
+    // This protects against unauthorized triggers.
+    if (webhookSecret && authHeader !== `Bearer ${webhookSecret}`) {
+        console.warn("[WEBHOOK] Unauthorized access attempt blocked.");
+        return new Response('Unauthorized', { status: 401 });
+    }
 
     try {
         const body = JSON.parse(payload);

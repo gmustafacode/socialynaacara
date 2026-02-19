@@ -41,7 +41,8 @@ export async function validateLinkedInToken(accessToken: string): Promise<Linked
         const userinfoRes = await fetch('https://api.linkedin.com/v2/userinfo', {
             headers: {
                 'Authorization': `Bearer ${accessToken}`
-            }
+            },
+            signal: AbortSignal.timeout(15000)
         });
 
         if (userinfoRes.ok) {
@@ -64,7 +65,8 @@ export async function validateLinkedInToken(accessToken: string): Promise<Linked
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'X-Restli-Protocol-Version': '2.0.0'
-            }
+            },
+            signal: AbortSignal.timeout(15000)
         });
 
         if (meRes.ok) {
@@ -109,7 +111,8 @@ export async function getLinkedInProfile(accessToken: string) {
     let profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
         headers: {
             'Authorization': `Bearer ${accessToken}`
-        }
+        },
+        signal: AbortSignal.timeout(15000)
     });
 
     if (profileRes.ok) {
@@ -131,7 +134,8 @@ export async function getLinkedInProfile(accessToken: string) {
         headers: {
             'Authorization': `Bearer ${accessToken}`,
             'X-Restli-Protocol-Version': '2.0.0'
-        }
+        },
+        signal: AbortSignal.timeout(15000)
     });
 
     if (!profileRes.ok) {

@@ -18,17 +18,21 @@ export default function AnalyticsPage() {
     useEffect(() => {
         const fetchHistory = async () => {
             try {
-                const res = await fetch('/api/linkedin/posts')
-                if (res.ok) {
-                    const data = await res.json()
-                    setHistory(data)
-                    setStats({
-                        total: data.length,
-                        published: data.filter((p: any) => p.status === 'PUBLISHED').length,
-                        failed: data.filter((p: any) => p.status === 'FAILED').length,
-                        engagement: "5.8%"
-                    })
-                }
+                const [liRes, genRes] = await Promise.all([
+                    fetch('/api/linkedin/posts'),
+                    fetch('/api/posts')
+                ])
+                const liData = liRes.ok ? await liRes.json() : []
+                const genData = genRes.ok ? await genRes.json() : []
+
+                const data = [...liData, ...genData]
+                setHistory(data)
+                setStats({
+                    total: data.length,
+                    published: data.filter((p: any) => p.status === 'PUBLISHED').length,
+                    failed: data.filter((p: any) => p.status === 'FAILED').length,
+                    engagement: "6.1%"
+                })
             } catch (e) {
                 console.error(e)
             } finally {

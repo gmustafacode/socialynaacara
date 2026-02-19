@@ -110,6 +110,7 @@ export async function GET(request: Request) {
                 grant_type: 'authorization_code',
                 redirect_uri: redirectUri,
             }),
+            signal: AbortSignal.timeout(20000)
         });
 
         const tokens = await tokenResponse.json();
@@ -119,16 +120,7 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: "Token exchange failed", details: tokens }, { status: 500 });
         }
 
-        // CRITICAL: Check if user can attach this platform (one account per platform rule)
-        const userId = (session.user as any).id;
-        const guardCheck = await PlatformGuard.canAttachPlatform(userId, platform);
-
-        if (!guardCheck.allowed) {
-            console.warn(`[OAuth] Platform attachment blocked for user ${userId}, platform ${platform}:`, guardCheck.reason);
-            return NextResponse.redirect(
-                `${getBaseUrl()}/dashboard/connect?error=platform_already_connected&platform=${platform}&message=${encodeURIComponent(guardCheck.reason || '')}`
-            );
-        }
+        // PlatformGuard check moved down after profile fetch to allow re-authentication of the same account.
 
         // 3. Fetch Platform Account ID & Metadata (Platform specific) Standardized
         let platformAccountId = "";
@@ -137,6 +129,7 @@ export async function GET(request: Request) {
         if (platform === 'google') {
             const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
                 headers: { Authorization: `Bearer ${tokens.access_token}` },
+                signal: AbortSignal.timeout(15000)
             });
             const profile = await profileRes.json();
             platformAccountId = profile.id;
@@ -149,6 +142,7 @@ export async function GET(request: Request) {
         } else if (platform === 'x') {
             const profileRes = await fetch('https://api.twitter.com/2/users/me?user.fields=profile_image_url', {
                 headers: { Authorization: `Bearer ${tokens.access_token}` },
+                signal: AbortSignal.timeout(15000)
             });
             const profile = await profileRes.json();
             platformAccountId = profile.data.id;
@@ -167,12 +161,16 @@ export async function GET(request: Request) {
 
             // For simplicity, take the first page that has an IG Business Account
             for (const page of pagesData.data || []) {
-                const igRes = await fetch(`https://graph.facebook.com/v18.0/${page.id}?fields=instagram_business_account&access_token=${tokens.access_token}`);
+                const igRes = await fetch(`https://graph.facebook.com/v18.0/${page.id}?fields=instagram_business_account&access_token=${tokens.access_token}`, {
+                    signal: AbortSignal.timeout(15000)
+                });
                 const igData = await igRes.json();
 
                 if (igData.instagram_business_account) {
                     platformAccountId = igData.instagram_business_account.id;
-                    const igProfileRes = await fetch(`https://graph.facebook.com/v18.0/${platformAccountId}?fields=username,name,profile_picture_url&access_token=${tokens.access_token}`);
+                    const igProfileRes = await fetch(`https://graph.facebook.com/v18.0/${platformAccountId}?fields=username,name,profile_picture_url&access_token=${tokens.access_token}`, {
+                        signal: AbortSignal.timeout(15000)
+                    });
                     const igProfile = await igProfileRes.json();
 
                     metadata = {
@@ -203,6 +201,7 @@ export async function GET(request: Request) {
         else if (platform === 'reddit') {
             const profileRes = await fetch('https://oauth.reddit.com/api/v1/me', {
                 headers: { Authorization: `Bearer ${tokens.access_token}` },
+                signal: AbortSignal.timeout(15000)
             });
             const profile = await profileRes.json();
             platformAccountId = profile.id;
@@ -211,6 +210,28 @@ export async function GET(request: Request) {
                 picture: profile.icon_img,
                 type: 'reddit'
             };
+        }
+
+        // CRITICAL: Check if user can attach this platform (one account per platform rule)
+        // Now that we have the platformAccountId, we can allow re-authentication of the SAME physical account.
+        const userId = (session.user as any).id;
+        const existingAccount = await db.socialAccount.findUnique({
+            where: {
+                user_platform_unique: {
+                    userId,
+                    platform
+                }
+            }
+        });
+
+        if (existingAccount && existingAccount.platformAccountId !== platformAccountId) {
+            const guardCheck = await PlatformGuard.canAttachPlatform(userId, platform);
+            if (!guardCheck.allowed) {
+                console.warn(`[OAuth] Platform attachment blocked for user ${userId}, platform ${platform}. Tried to connect different account: ${platformAccountId}`);
+                return NextResponse.redirect(
+                    `${getBaseUrl()}/dashboard/connect?error=platform_already_connected&platform=${platform}&message=${encodeURIComponent(guardCheck.reason || '')}`
+                );
+            }
         }
 
         // 4. Encrypt and Save to DB
