@@ -145,12 +145,6 @@ export class LinkedInPostingService {
 
                 console.error("[LinkedInPosting] Feed post failed:", errorMsg + serviceCode);
 
-                // Edge Case: If it's a timeout, log it specifically
-                if (err.code === 'ECONNABORTED') {
-                    console.error("[LinkedInPosting] Feed post timed out after 30s");
-                }
-
-
                 // Duplicate Content Rescue: If LinkedIn says it's a duplicate, extract the URN and treat as success
                 const duplicateMatch = errorMsg.match(/duplicate of (urn:li:[a-zA-Z0-9:]+)/);
                 if (duplicateMatch && duplicateMatch[1]) {
@@ -278,37 +272,29 @@ export class LinkedInPostingService {
                 if (isVideo || isArticle) {
                     const link = youtubeUrl || (hasMediaUrls ? mediaUrls![0] : "");
                     if (link && !finalDescription.includes(link)) {
-                        finalDescription = `${finalDescription}\n\n🔗 ${link}`;
+                        finalDescription = `${description}\n\n🔗 ${link}`;
                     }
                 }
             } else if (isVideo || isArticle) {
-                // Total fallback to ARTICLE if native upload fails or no assets found
+                // Total fallback to ARTICLE if native upload fails
                 shareMediaCategory = "ARTICLE";
-                const originalUrl = youtubeUrl || (hasMediaUrls ? mediaUrls![0] : undefined);
-
-                if (originalUrl) {
-                    media = [{
-                        status: "READY",
-                        description: { text: description.substring(0, 250) },
-                        originalUrl: originalUrl,
-                        title: { text: title || (isVideo ? "Shared Video" : "Shared Article") },
-                        thumbnails: thumbnailUrl ? [{ url: thumbnailUrl }] : []
-                    }];
-                } else {
-                    shareMediaCategory = "NONE";
-                    media = [];
-                }
+                media = [{
+                    status: "READY",
+                    description: { text: description },
+                    originalUrl: youtubeUrl || (hasMediaUrls ? mediaUrls![0] : undefined),
+                    title: { text: title || (isVideo ? "Shared Video" : "Shared Article") },
+                    thumbnails: thumbnailUrl ? [{ url: thumbnailUrl }] : []
+                }];
             }
-        } else if ((isVideo || isArticle) && (youtubeUrl || hasMediaUrls)) {
+        } else if (isVideo || isArticle) {
             shareMediaCategory = "ARTICLE";
             media = [{
                 status: "READY",
-                description: { text: description.substring(0, 250) },
+                description: { text: description },
                 originalUrl: youtubeUrl || (hasMediaUrls ? mediaUrls![0] : undefined),
                 title: { text: title || (isVideo ? "Shared Video" : "Shared Article") }
             }];
         }
-
 
         const payload = {
             author: authorUrn,
@@ -397,13 +383,11 @@ export class LinkedInPostingService {
 
         // 3. Perform the binary upload
         await axios.put(uploadUrl, imageBuffer, {
-            timeout: 60000, // 60s timeout for binary upload (crucial to prevent hangs)
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': imageRes.headers['content-type'] || 'image/jpeg'
             }
         });
-
 
         console.log(`[LinkedInPosting] Image registered as native asset: ${assetUrn}`);
         return assetUrn;
