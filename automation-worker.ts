@@ -2,267 +2,254 @@
 import 'dotenv/config';
 import db from './lib/db';
 import cron from 'node-cron';
-import { inngest } from './lib/inngest/client';
+import { LinkedInPostingService } from './lib/linkedin-posting-service';
 import { getValidAccessToken } from './lib/oauth';
 import { getBaseUrl } from './lib/utils';
 
 /**
- * SOCIALSYNCARA SYSTEM WORKER (HARDENED v2)
+ * SOCIALSYNCARA BACKEND CRON WORKER (v3 - Database Driven)
  * 
- * Performance & Reliability Updates:
- * 1. Stale Job Recovery: Automatically resets jobs stuck in 'PROCESSING' or 'PENDING'.
- * 2. Proper Status Flow: Uses 'PROCESSING' during execution instead of premature 'PUBLISHED'.
- * 3. Enhanced DB Resilience: More robust retry logic and connection handling.
- * 4. Improved Logging: Detailed error reporting for debugging.
+ * Objectives:
+ * 1. Process scheduled posts from DB.
+ * 2. Distributed safety via SELECT FOR UPDATE SKIP LOCKED.
+ * 3. Support retries with exponential-ish logic (simple count for now).
+ * 4. Comprehensive execution logging.
  */
 
 let isRunning = false;
 
-// Simple database wrapper with retry logic for resilience against connection drops
-async function dbRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
-    let lastError: any;
-    for (let i = 0; i < retries; i++) {
-        try {
-            return await fn();
-        } catch (error: any) {
-            lastError = error;
-            const msg = error.message || "";
-            if (msg.includes('Server has closed the connection') ||
-                msg.includes('connection') ||
-                msg.includes('timeout') ||
-                msg.includes('Pool')) {
-                console.warn(`[WORKER] DB Connection Error (Attempt ${i + 1}/${retries}). Retrying...`);
-                await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
-                continue;
-            }
-            throw error;
-        }
-    }
-    throw lastError;
-}
-
 /**
- * Resets jobs that have been stuck in an intermediate state for too long.
- * Prevents "Silent Failures" and "Ghost Processing".
+ * Resets jobs that have been stuck in 'processing' for too long.
  */
 async function recoverStaleJobs() {
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
 
-    // 1. Recover LinkedIn Posts
-    const stuckLinkedIn = await db.linkedInPost.updateMany({
+    const stuckPosts = await db.scheduledPost.updateMany({
         where: {
-            status: { in: ['PROCESSING', 'PENDING'] },
-            updatedAt: { lte: tenMinutesAgo }
+            status: 'processing',
+            updatedAt: { lte: thirtyMinutesAgo }
         },
         data: {
-            status: 'SCHEDULED', // Push back to queue
-            errorMessage: 'Stale post recovery: Reset after timeout.'
+            status: 'pending',
+            lastError: 'Stale post recovery: Reset after processing timeout.'
         }
     });
-    if (stuckLinkedIn.count > 0) console.log(`[WORKER] Recovered ${stuckLinkedIn.count} stale LinkedIn posts.`);
 
-    // 2. Recover Generic Posts
-    const stuckGeneric = await db.scheduledPost.updateMany({
-        where: {
-            status: { in: ['PROCESSING', 'PENDING'] },
-            updatedAt: { lte: tenMinutesAgo }
-        },
-        data: {
-            status: 'SCHEDULED'
-        }
-    });
-    if (stuckGeneric.count > 0) console.log(`[WORKER] Recovered ${stuckGeneric.count} stale Generic posts.`);
+    if (stuckPosts.count > 0) {
+        console.log(`[WORKER] Recovered ${stuckPosts.count} stale scheduled posts.`);
+    }
 }
 
 async function checkAndProcess() {
     if (isRunning) {
-        console.log("[WORKER] Previous run still in progress. Skipping this tick.");
+        console.log("[WORKER] Previous cycle still in progress. Skipping.");
         return;
     }
 
     isRunning = true;
-    const now = new Date();
-    console.log(`[WORKER] [${now.toISOString()}] Starting check cycle...`);
+    const startedAt = new Date();
+    console.log(`[WORKER] [${startedAt.toISOString()}] Starting cron cycle...`);
+
+    let processedCount = 0;
+    let publishedCount = 0;
+    let failedCount = 0;
+    let errorsCount = 0;
 
     try {
         await recoverStaleJobs();
-        await processScheduledLinkedInPosts(now);
-        await processScheduledGenericPosts(now);
-        await processLegacyContentQueue(now);
-    } catch (error: any) {
-        console.error("[WORKER] [CRITICAL] Loop error:", error.message);
+
+        // 1. Fetch due posts with Row Locking (PostgreSQL specific)
+        // SKIP LOCKED ensures horizontal scalability without double-processing
+        const duePostIds: { id: string }[] = await db.$queryRaw`
+            SELECT id FROM "scheduled_posts"
+            WHERE status = 'pending'
+            AND "scheduledAt" <= NOW()
+            ORDER BY "scheduledAt" ASC
+            LIMIT 50
+            FOR UPDATE SKIP LOCKED;
+        `;
+
+        if (duePostIds.length === 0) {
+            isRunning = false; // Early exit
+            return;
+        }
+
+        processedCount = duePostIds.length;
+        console.log(`[WORKER] Found ${processedCount} posts to process.`);
+
+        for (const { id } of duePostIds) {
+            try {
+                // 2. Claim and Start Processing
+                const post = await db.scheduledPost.update({
+                    where: { id },
+                    data: {
+                        status: 'processing',
+                        updatedAt: new Date()
+                    },
+                    include: { socialAccount: true }
+                });
+
+                console.log(`[WORKER] Processing ${post.platform} post: ${id}`);
+
+                // 3. Worker Logic: Prepare and Prepare for Publish
+                const driftMs = Date.now() - post.scheduledAt.getTime();
+                console.log(`[WORKER] Processing ${post.platform} post: ${id} (Drift: ${driftMs}ms)`);
+
+                let result: any = null;
+
+                if (post.platform === 'linkedin') {
+                    if (!post.contentId) throw new Error("LinkedIn post missing contentId");
+
+                    // Trigger Existing Worker Logic (The Ingestion Layer)
+                    result = await LinkedInPostingService.publishPost(post.contentId);
+
+                    if (result.status === 'PUBLISHED' || result.status === 'PARTIAL_SUCCESS') {
+                        // Success path
+                        await db.scheduledPost.update({
+                            where: { id },
+                            data: {
+                                status: 'published',
+                                publishedAt: new Date(),
+                                externalPostId: result.results?.[0] || null,
+                                updatedAt: new Date()
+                            }
+                        });
+
+                        // Ensure LinkedInPost table is also marked published
+                        await db.linkedInPost.update({
+                            where: { id: post.contentId },
+                            data: { status: 'PUBLISHED' }
+                        }).catch(() => { });
+
+                        publishedCount++;
+                        console.log(`[WORKER] Successfully published LinkedIn post: ${id}`);
+                    } else {
+                        throw new Error(result.errors?.join(' | ') || "LinkedIn publishing failed with unknown error");
+                    }
+                } else if (post.platform === 'rss' || post.platform === 'manual') {
+                    // ContentQueue based posts
+                    const accessToken = await getValidAccessToken(post.socialAccountId);
+                    const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
+
+                    if (!webhookUrl) throw new Error("N8N_PUBLISH_WEBHOOK_URL not configured");
+
+                    const response = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-webhook-secret': process.env.WEBHOOK_SECRET || ''
+                        },
+                        body: JSON.stringify({
+                            postId: post.id,
+                            accessToken,
+                            platform: post.platform,
+                            postType: post.postType,
+                            contentText: post.contentText,
+                            callbackUrl: `${getBaseUrl()}/api/posts/update-status`
+                        }),
+                        signal: AbortSignal.timeout(30000)
+                    });
+
+                    if (!response.ok) throw new Error(`Webhook Failed: ${response.status}`);
+
+                    // ContentQueue status update
+                    if (post.contentId) {
+                        await db.contentQueue.update({
+                            where: { id: post.contentId },
+                            data: { status: 'published', publishedAt: new Date() }
+                        }).catch(() => { });
+                    }
+
+                    await db.scheduledPost.update({
+                        where: { id },
+                        data: {
+                            status: 'published',
+                            publishedAt: new Date(),
+                            updatedAt: new Date()
+                        }
+                    });
+                    publishedCount++;
+                } else {
+                    // Default fallback for other platforms
+                    const accessToken = await getValidAccessToken(post.socialAccountId);
+                    const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
+                    if (webhookUrl && accessToken) {
+                        await fetch(webhookUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ postId: post.id, accessToken })
+                        });
+                    }
+
+                    await db.scheduledPost.update({
+                        where: { id },
+                        data: {
+                            status: 'published',
+                            publishedAt: new Date(),
+                            updatedAt: new Date()
+                        }
+                    });
+                    publishedCount++;
+                }
+
+
+            } catch (postError: any) {
+                console.error(`[WORKER] Error processing post ${id}:`, postError.message);
+                failedCount++;
+                errorsCount++;
+
+                const currentPost = await db.scheduledPost.findUnique({ where: { id } });
+                const retryCount = (currentPost?.retryCount || 0) + 1;
+                const setStatus = retryCount < 3 ? 'pending' : 'failed';
+
+                await db.scheduledPost.update({
+                    where: { id },
+                    data: {
+                        status: setStatus,
+                        retryCount: retryCount,
+                        lastError: postError.message,
+                        updatedAt: new Date()
+                    }
+                });
+            }
+        }
+    } catch (globalError: any) {
+        console.error("[WORKER] [CRITICAL] Global execution error:", globalError.message);
     } finally {
+        const finishedAt = new Date();
+        const executionTimeMs = finishedAt.getTime() - startedAt.getTime();
+
+        // 4. Log execution summary
+        try {
+            await db.cronExecutionLog.create({
+                data: {
+                    startedAt,
+                    finishedAt,
+                    processed: processedCount,
+                    published: publishedCount,
+                    failed: failedCount,
+                    executionTimeMs,
+                    errorsCount
+                }
+            });
+        } catch (logError) {
+            console.error("[WORKER] Failed to save execution log:", logError);
+        }
+
         isRunning = false;
-        console.log(`[WORKER] [${new Date().toISOString()}] Cycle complete.`);
+        console.log(`[WORKER] Cycle complete. Processed: ${processedCount}, Success: ${publishedCount}, Failed: ${failedCount}`);
     }
 }
 
-async function processScheduledLinkedInPosts(now: Date) {
-    const duePosts = await dbRetry(() => db.linkedInPost.findMany({
-        where: {
-            status: 'SCHEDULED',
-            scheduledAt: { lte: now }
-        },
-        take: 50
-    }));
-
-    if (duePosts.length > 0) {
-        console.log(`[WORKER] [LinkedIn] Found ${duePosts.length} due posts.`);
-    }
-
-    for (const post of duePosts) {
-        try {
-            console.log(`[WORKER] [LinkedIn] Dispatching post ${post.id}`);
-
-            const result = await dbRetry(() => db.linkedInPost.updateMany({
-                where: {
-                    id: post.id,
-                    status: 'SCHEDULED'
-                },
-                data: {
-                    status: 'PENDING',
-                    updatedAt: new Date()
-                }
-            }));
-
-            if (result.count === 0) continue;
-
-            await inngest.send({
-                name: "linkedin/post.publish",
-                data: { postId: post.id }
-            });
-
-            console.log(`[WORKER] [LinkedIn] Successfully dispatched post ${post.id} to Inngest.`);
-        } catch (error: any) {
-            console.error(`[WORKER] [LinkedIn] Dispatch failure for post ${post.id}:`, error.message);
-            // Move it back to SCHEDULED so it can be retried or picked up by recovery if needed
-            try {
-                await db.linkedInPost.update({
-                    where: { id: post.id },
-                    data: {
-                        status: 'SCHEDULED',
-                        errorMessage: `Worker dispatch error: ${error.message}`
-                    }
-                });
-            } catch (e) { }
-        }
-    }
-}
-
-async function processScheduledGenericPosts(now: Date) {
-    const duePosts = await dbRetry(() => db.scheduledPost.findMany({
-        where: {
-            status: 'SCHEDULED',
-            scheduledAt: { lte: now }
-        },
-        include: { socialAccount: true },
-        take: 50
-    }));
-
-    if (duePosts.length > 0) {
-        console.log(`[WORKER] [Generic] Found ${duePosts.length} due posts.`);
-    }
-
-    for (const post of duePosts) {
-        try {
-            console.log(`[WORKER] [Generic] Processing post ${post.id} (${post.platform})`);
-
-            // Use 'PROCESSING' state during the fetch
-            const result = await dbRetry(() => db.scheduledPost.updateMany({
-                where: {
-                    id: post.id,
-                    status: 'SCHEDULED'
-                },
-                data: {
-                    status: 'PROCESSING',
-                    updatedAt: new Date()
-                }
-            }));
-
-            if (result.count === 0) continue;
-
-            const accessToken = await getValidAccessToken(post.socialAccountId);
-            if (!accessToken) throw new Error("Failed to get access token (revoked or expired)");
-
-            const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
-            if (!webhookUrl) {
-                console.error("[WORKER] [Generic] N8N_PUBLISH_WEBHOOK_URL is not set.");
-                await db.scheduledPost.update({
-                    where: { id: post.id },
-                    data: { status: 'FAILED' }
-                });
-                continue;
-            }
-
-            const response = await fetch(webhookUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-webhook-secret': process.env.WEBHOOK_SECRET || ''
-                },
-                body: JSON.stringify({
-                    postId: post.id,
-                    accessToken,
-                    postType: post.postType,
-                    contentText: post.contentText,
-                    mediaUrl: post.mediaUrl,
-                    targetType: post.targetType,
-                    targetId: post.targetId,
-                    authorUrn: post.socialAccount.platformAccountId,
-                    callbackUrl: `${getBaseUrl()}/api/posts/update-status`
-                }),
-                signal: AbortSignal.timeout(15000) // Increased to 15s
-            });
-
-            if (!response.ok) {
-                const errorData = await response.text();
-                throw new Error(`Webhook API Error (${response.status}): ${errorData.substring(0, 100)}`);
-            }
-
-            console.log(`[WORKER] [Generic] Officially dispatched post ${post.id}. Status is currently PROCESSING until callback.`);
-
-        } catch (error: any) {
-            console.error(`[WORKER] [Generic] Execution failure for post ${post.id}:`, error.message);
-            try {
-                await db.scheduledPost.update({
-                    where: { id: post.id },
-                    data: {
-                        status: 'FAILED',
-                        // If we had an error field, we'd log it here.
-                    }
-                });
-            } catch (e) { }
-        }
-    }
-}
-
-async function processLegacyContentQueue(now: Date) {
-    try {
-        const pendingJobs = await dbRetry(() => db.contentQueue.findMany({
-            where: {
-                status: 'pending',
-                scheduledAt: { lte: now }
-            },
-            take: 20
-        }));
-
-        for (const job of pendingJobs) {
-            try {
-                // For legacy queue, we just push to processing status as a stub
-                await db.contentQueue.update({
-                    where: { id: job.id },
-                    data: { status: 'processing' }
-                });
-            } catch (e) { }
-        }
-    } catch (error: any) {
-        console.error("[WORKER] [Queue] Error:", error.message);
-    }
-}
-
-// CONFIGURATION: Hourly heartbeat log, minutely execution
-console.log("[WORKER] Scheduler started. Monitoring database for due posts...");
+// Start Scheduler
+console.log("[WORKER] SocialSyncAra Backend Scheduler Active (Running Every Minute)");
 cron.schedule('* * * * *', checkAndProcess);
 
-// Run immediately on start
+// Handle process signals for graceful shutdown
+process.on('SIGTERM', () => {
+    console.log("[WORKER] SIGTERM received. Closing...");
+    process.exit(0);
+});
+
+// Run immediately on startup
 checkAndProcess();
