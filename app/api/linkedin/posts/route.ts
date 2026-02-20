@@ -169,9 +169,27 @@ export async function POST(request: Request) {
         });
 
 
-        // 5. Hand-off to Inngest for Background Processing (Only for immediate posts)
-        // Scheduled posts are handled by the internal automation-worker.ts
-        if (!scheduledAt) {
+        // 6. Hand-off to Inngest for Background Processing
+        if (scheduledAt) {
+            // Scheduled post: fire the schedule event (Inngest will sleep until the time and then publish)
+            try {
+                await inngest.send({
+                    name: "linkedin/post.schedule",
+                    data: {
+                        postId: post.id,
+                        scheduledAt: new Date(scheduledAt).toISOString()
+                    }
+                });
+            } catch (inngestError: any) {
+                console.error("[LinkedIn API] Inngest schedule dispatch failed:", inngestError);
+                await db.linkedInPost.update({
+                    where: { id: post.id },
+                    data: { status: 'FAILED', errorMessage: `Schedule dispatch failed: ${inngestError.message}` }
+                });
+                return NextResponse.json({ error: "Failed to queue scheduled post" }, { status: 503 });
+            }
+        } else {
+            // Immediate post: fire the publish event
             try {
                 await inngest.send({
                     name: "linkedin/post.publish",
@@ -179,7 +197,6 @@ export async function POST(request: Request) {
                 });
             } catch (inngestError: any) {
                 console.error("[LinkedIn API] Inngest dispatch failed:", inngestError);
-                // Revert status to FAILED since it didn't hit the background engine
                 await db.linkedInPost.update({
                     where: { id: post.id },
                     data: { status: 'FAILED', errorMessage: `Background dispatch failed: ${inngestError.message}` }
