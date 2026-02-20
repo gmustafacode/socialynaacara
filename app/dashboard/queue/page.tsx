@@ -15,7 +15,8 @@ import {
     ChevronRight,
     Search,
     History,
-    MoreHorizontal
+    MoreHorizontal,
+    Trash2
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -179,6 +180,26 @@ export default function QueuePage() {
                                                     <Send className="size-4" />
                                                 </Button>
                                             </Link>
+                                            <Button
+                                                variant="ghost"
+                                                className="rounded-xl border border-white/10 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400 size-12 p-0 transition-colors"
+                                                onClick={async () => {
+                                                    if (!confirm("Discard this intelligence?")) return;
+                                                    try {
+                                                        const res = await fetch(`/api/content/${item.id}`, { method: 'DELETE' });
+                                                        if (res.ok) {
+                                                            toast.success("Content discarded");
+                                                            fetchData();
+                                                        } else {
+                                                            toast.error("Failed to discard");
+                                                        }
+                                                    } catch (e) {
+                                                        toast.error("Connection error");
+                                                    }
+                                                }}
+                                            >
+                                                <Trash2 className="size-4" />
+                                            </Button>
                                         </div>
                                     </CardContent>
                                 </Card>
@@ -297,7 +318,7 @@ export default function QueuePage() {
                     )}
                 </TabsContent>
             </Tabs>
-        </div>
+        </div >
     )
 }
 

@@ -273,6 +273,14 @@ export async function GET(request: Request) {
                 }
             });
 
+            // CRITICAL SECURITY FIX: Prevent stealing or silent updates of other users' accounts
+            if (existing && existing.userId !== userId) {
+                console.warn(`[OAuth] Blocked attempt to connect account ${platformAccountId} (User ${userId}) which is already owned by User ${existing.userId}`);
+                return NextResponse.redirect(
+                    `${getBaseUrl()}/dashboard/connect?error=account_already_linked&platform=${platform}&message=${encodeURIComponent('This account is already connected to another user.')}`
+                );
+            }
+
             if (existing && existing.id !== accountId) {
                 console.log(`[OAuth] Resolving conflict: Deactivating old account ${existing.id} for platform ${platform}`);
                 // Instead of deleting, we mark as 'archived' or 'inactive' to preserve history
@@ -287,20 +295,41 @@ export async function GET(request: Request) {
                 data: updateData,
             });
         } else {
-            await db.socialAccount.upsert({
+            // No pending accountId (e.g. initial connect flow)
+            // Check if this platform account exists
+            const existing = await db.socialAccount.findUnique({
                 where: {
                     platform_platformAccountId: {
                         platform: platform,
                         platformAccountId: platformAccountId,
                     }
-                },
-                update: updateData,
-                create: {
-                    userId,
-                    platform,
-                    ...updateData,
-                },
+                }
             });
+
+            if (existing) {
+                if (existing.userId !== userId) {
+                    // Block cross-user connection
+                    console.warn(`[OAuth] Blocked attempt to connect account ${platformAccountId} (User ${userId}) which is already owned by User ${existing.userId}`);
+                    return NextResponse.redirect(
+                        `${getBaseUrl()}/dashboard/connect?error=account_already_linked&platform=${platform}&message=${encodeURIComponent('This account is already connected to another user.')}`
+                    );
+                } else {
+                    // Same user, update tokens
+                    await db.socialAccount.update({
+                        where: { id: existing.id },
+                        data: updateData
+                    });
+                }
+            } else {
+                // Create new
+                await db.socialAccount.create({
+                    data: {
+                        userId,
+                        platform,
+                        ...updateData,
+                    }
+                });
+            }
         }
 
         return NextResponse.redirect(`${getBaseUrl()}/dashboard/connect?success=true&platform=${platform}`);

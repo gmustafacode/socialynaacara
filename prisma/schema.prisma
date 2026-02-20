@@ -132,11 +132,18 @@ model ContentQueue {
   scheduledAt DateTime?     @map("scheduled_at")
   createdAt   DateTime      @default(now()) @map("created_at")
   updatedAt   DateTime      @updatedAt @map("updated_at")
-  user        User?         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  postHistory PostHistory[]
+  aiStatus       String?            @map("ai_status")
+  finalScore     Float?             @map("final_score")
+  decisionReason String?            @map("decision_reason")
+  analyzedAt     DateTime?          @map("analyzed_at")
+  aiAnalysis     ContentAiAnalysis?
+  user           User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postHistory    PostHistory[]
 
   @@index([status])
   @@index([scheduledAt])
+  @@index([userId])
+  @@index([viralScore(sort: Desc), createdAt(sort: Desc)])
   @@map("content_queue")
 }
 
@@ -152,6 +159,8 @@ model PostHistory {
   content           ContentQueue? @relation(fields: [contentId], references: [id], onDelete: Cascade)
   user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+  @@index([contentId])
   @@map("post_history")
 }
 
@@ -236,4 +245,41 @@ model IngestionLog {
   createdAt      DateTime @default(now()) @map("created_at")
 
   @@map("ingestion_logs")
+}
+
+model ContentAiAnalysis {
+  id                    String        @id @default(uuid())
+  contentId             String        @unique @map("content_id")
+  category              String
+  contentQualityScore   Int           @map("content_quality_score")
+  engagementScore       Int           @map("engagement_score")
+  viralityProbability   Int           @map("virality_probability")
+  finalScore            Float         @map("final_score")
+  recommendedPlatforms  Json          @map("recommended_platforms")
+  contentTypeRecommendation String    @map("content_type_recommendation")
+  rewriteNeeded         Boolean       @map("rewrite_needed")
+  reasoning             String
+  rawLlmResponse        Json          @map("raw_llm_response")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  content               ContentQueue  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+
+  @@index([contentId])
+  @@map("content_ai_analysis")
+}
+
+model AiProcessingLog {
+  id            String   @id @default(uuid())
+  batchId       String   @map("batch_id")
+  batchSize     Int      @map("batch_size")
+  processed     Int
+  approved      Int
+  review        Int
+  rejected      Int
+  aiErrors      Int      @map("ai_errors")
+  executionTime Int      @map("execution_time")
+  startedAt     DateTime @map("started_at")
+  finishedAt    DateTime @map("finished_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("ai_processing_logs")
 }

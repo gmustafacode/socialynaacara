@@ -151,7 +151,27 @@ export default function DashboardPage() {
                             <CardTitle>Quick Actions</CardTitle>
                         </CardHeader>
                         <CardContent className="space-y-4">
-                            <button className="w-full h-12 rounded-xl bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-sm font-bold transition-all shadow-lg shadow-purple-900/40 active:scale-[0.98]">
+                            <button
+                                onClick={async () => {
+                                    const { toast } = await import("sonner")
+                                    toast.promise(
+                                        fetch('/api/ai/trigger', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ batch_size: 5 })
+                                        }).then(async res => {
+                                            if (!res.ok) throw new Error(await res.text());
+                                            return res.json();
+                                        }),
+                                        {
+                                            loading: 'Initializing Neural Engine...',
+                                            success: (data) => `Campaign Active: ${data.processing_count || 0} items queued for analysis`,
+                                            error: 'AI Trigger Failed'
+                                        }
+                                    )
+                                }}
+                                className="w-full h-12 rounded-xl bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-sm font-bold transition-all shadow-lg shadow-purple-900/40 active:scale-[0.98]"
+                            >
                                 Generate AI Campaign
                             </button>
                             <button

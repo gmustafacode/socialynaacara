@@ -1,0 +1,73 @@
+
+import db from "@/lib/db";
+
+export const OPS_LIMITS = {
+    LINKEDIN: {
+        DAILY_POSTS: 25,     // Safe limit for personal profiles to avoid spam flags
+        MIN_INTERVAL_MINUTES: 15 // Force 15 min gap between posts
+    },
+    TIKTOK: {
+        DAILY_POSTS: 10,
+        MIN_INTERVAL_MINUTES: 5
+    }
+};
+
+/**
+ * Checks if a user has exceeded their posting limits for a given platform.
+ * Returns { allowed: true } or { allowed: false, error: "Reason" }
+ */
+export async function checkPostingLimits(userId: string, platform: string = 'linkedin'): Promise<{ allowed: boolean, error?: string }> {
+    try {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+        // 1. Check Daily Limit
+        const dailyCount = await db.postHistory.count({
+            where: {
+                userId,
+                platform: { equals: platform, mode: 'insensitive' }, // Case insensitive match
+                postedAt: {
+                    gte: todayStart,
+                    lte: todayEnd
+                },
+                status: 'PUBLISHED' // Only count successful posts towards limit? Or all attempts? Let's count PUBLISHED + PROCESSING to be safe.
+            }
+        });
+
+        // Get limit for platform (default to LinkedIn if unknown)
+        const limit = (OPS_LIMITS as any)[platform.toUpperCase()]?.DAILY_POSTS || 20;
+
+        if (dailyCount >= limit) {
+            return { allowed: false, error: `Daily limit of ${limit} posts reached for ${platform}.` };
+        }
+
+        // 2. Check recent posts (Spam Protection)
+        // Find the most recent post
+        const lastPost = await db.postHistory.findFirst({
+            where: {
+                userId,
+                platform: { equals: platform, mode: 'insensitive' },
+            },
+            orderBy: { postedAt: 'desc' }
+        });
+
+        if (lastPost) {
+            const minInterval = (OPS_LIMITS as any)[platform.toUpperCase()]?.MIN_INTERVAL_MINUTES || 5;
+            const postedDate = new Date(lastPost.postedAt); // Ensure it's a Date object
+            const nextAllowedTime = new Date(postedDate.getTime() + minInterval * 60000);
+
+            if (now < nextAllowedTime) {
+                const minutesLeft = Math.ceil((nextAllowedTime.getTime() - now.getTime()) / 60000);
+                return { allowed: false, error: `Rate limit: Please wait ${minutesLeft} minutes before posting again.` };
+            }
+        }
+
+        return { allowed: true };
+
+    } catch (error) {
+        console.error("Error checking limits:", error);
+        // Fail open or closed? Fail closed for safety.
+        return { allowed: false, error: "System error checking limits." };
+    }
+}

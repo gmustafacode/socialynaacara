@@ -22,7 +22,7 @@ export async function processIngestedContent(
 
             // Check content length for text sources
             const contentLength = Math.max(item.summary?.length || 0, item.rawContent?.length || 0);
-            if (item.contentType === 'text' && contentLength < 20) { // Relaxed to 20 for testing
+            if (item.contentType === 'text' && contentLength < 100) {
                 console.warn(`[Ingestion] Content too short (${contentLength} chars) for ${item.title}`);
                 errorCount++;
                 continue;

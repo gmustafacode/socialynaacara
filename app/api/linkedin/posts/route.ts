@@ -13,6 +13,14 @@ export async function POST(request: Request) {
 
     try {
         const userId = (session.user as any).id;
+
+        // 0. Rate Limiting Check
+        const { checkPostingLimits } = await import("@/lib/limits");
+        const limitCheck = await checkPostingLimits(userId, 'linkedin');
+        if (!limitCheck.allowed) {
+            return NextResponse.json({ error: limitCheck.error || "Rate limit exceeded" }, { status: 429 });
+        }
+
         const body = await request.json();
         const {
             socialAccountId,

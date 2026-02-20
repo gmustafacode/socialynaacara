@@ -44,7 +44,7 @@ async function main() {
         const platform = account.platform;
         const status = account.status;
         const id = account.id;
-
+        
         // Fetch user manually
         const user = await db.user.findUnique({ where: { id: userId } });
         const userEmail = user?.email || "Unknown";

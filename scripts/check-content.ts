@@ -1,17 +1,15 @@
-import { PrismaClient } from '@prisma/client'
-
-const prisma = new PrismaClient()
+import db from '../lib/db'
 
 async function main() {
-    const count = await prisma.contentQueue.count()
+    const count = await db.contentQueue.count()
     console.log(`Total items in ContentQueue: ${count}`)
 
-    const pendingCount = await prisma.contentQueue.count({
+    const pendingCount = await db.contentQueue.count({
         where: { status: 'pending' }
     })
     console.log(`Pending items: ${pendingCount}`)
 
-    const ingestedLogs = await prisma.ingestionLog.findMany({
+    const ingestedLogs = await db.ingestionLog.findMany({
         orderBy: { createdAt: 'desc' },
         take: 5
     })
@@ -24,5 +22,5 @@ main()
         process.exit(1)
     })
     .finally(async () => {
-        await prisma.$disconnect()
+        // Shared db instance
     })
