@@ -168,7 +168,7 @@ async function checkAndProcess() {
                 }
 
                 // 3. Worker Logic: Prepare and Prepare for Publish
-                const driftMs = Date.now() - post.scheduledAt.getTime();
+                const driftMs = post.scheduledAt ? Date.now() - post.scheduledAt.getTime() : 0;
                 console.log(`[WORKER] Processing ${post.platform} post: ${id} (Drift: ${driftMs}ms)`);
 
                 let result: any = null;
