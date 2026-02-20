@@ -79,21 +79,59 @@ export default function AnalyticsPage() {
                         </div>
                     </CardHeader>
                     <CardContent className="p-8 pt-12 h-[350px]">
-                        <div className="h-full flex items-end justify-between gap-2 md:gap-4">
-                            {[45, 60, 35, 80, 50, 90, 40, 70, 55, 65, 30, 85, 45, 95].map((val, i) => (
-                                <div key={i} className="flex-1 flex flex-col items-center gap-4 group">
-                                    <div
-                                        className="w-full bg-gradient-to-t from-purple-600/20 to-purple-500/60 rounded-t-xl transition-all duration-700 group-hover:to-purple-400 relative"
-                                        style={{ height: `${val}%` }}
-                                    >
-                                        <div className="absolute -top-10 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-white text-black text-[10px] font-black p-2 rounded-lg shadow-2xl">
-                                            {val}
-                                        </div>
-                                    </div>
-                                    <span className="text-[8px] font-black text-white/10 uppercase tracking-tighter">Day {i + 1}</span>
+                        {history.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-center">
+                                <div className="space-y-3">
+                                    <BarChart3 className="size-12 text-white/10 mx-auto" />
+                                    <p className="text-white/30 text-sm font-medium">No transmission data yet</p>
+                                    <p className="text-white/15 text-xs">Start posting to see your activity chart here.</p>
                                 </div>
-                            ))}
-                        </div>
+                            </div>
+                        ) : (
+                            <div className="h-full flex items-end justify-between gap-2 md:gap-4">
+                                {(() => {
+                                    // Build real data from last 14 days
+                                    const days = Array.from({ length: 14 }, (_, i) => {
+                                        const d = new Date()
+                                        d.setDate(d.getDate() - (13 - i))
+                                        d.setHours(0, 0, 0, 0)
+                                        return d
+                                    })
+                                    const maxCount = Math.max(1, ...days.map(day => {
+                                        const next = new Date(day)
+                                        next.setDate(next.getDate() + 1)
+                                        return history.filter((p: any) => {
+                                            const t = new Date(p.createdAt).getTime()
+                                            return t >= day.getTime() && t < next.getTime()
+                                        }).length
+                                    }))
+                                    return days.map((day, i) => {
+                                        const next = new Date(day)
+                                        next.setDate(next.getDate() + 1)
+                                        const count = history.filter((p: any) => {
+                                            const t = new Date(p.createdAt).getTime()
+                                            return t >= day.getTime() && t < next.getTime()
+                                        }).length
+                                        const pct = Math.max(5, (count / maxCount) * 100)
+                                        return (
+                                            <div key={i} className="flex-1 flex flex-col items-center gap-4 group">
+                                                <div
+                                                    className="w-full bg-gradient-to-t from-purple-600/20 to-purple-500/60 rounded-t-xl transition-all duration-700 group-hover:to-purple-400 relative"
+                                                    style={{ height: `${pct}%` }}
+                                                >
+                                                    <div className="absolute -top-10 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-white text-black text-[10px] font-black p-2 rounded-lg shadow-2xl whitespace-nowrap">
+                                                        {count}
+                                                    </div>
+                                                </div>
+                                                <span className="text-[8px] font-black text-white/10 uppercase tracking-tighter">
+                                                    {day.toLocaleDateString('en', { month: 'short', day: 'numeric' })}
+                                                </span>
+                                            </div>
+                                        )
+                                    })
+                                })()}
+                            </div>
+                        )}
                     </CardContent>
                 </Card>
 

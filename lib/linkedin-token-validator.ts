@@ -51,9 +51,14 @@ export async function validateLinkedInToken(accessToken: string): Promise<Linked
             result.isValid = true;
             console.log('[LinkedIn Validation] ✅ /v2/userinfo accessible (OIDC scopes present)');
         } else {
-            const error = await userinfoRes.json().catch(() => ({ message: 'Unknown error' }));
-            result.errors.push(`/v2/userinfo failed: ${JSON.stringify(error)}`);
-            console.warn('[LinkedIn Validation] ⚠️ /v2/userinfo failed:', error);
+            let errorBody: any;
+            try {
+                errorBody = await userinfoRes.json();
+            } catch (e) {
+                errorBody = { message: await userinfoRes.text().catch(() => 'Unreadable error') };
+            }
+            result.errors.push(`/v2/userinfo failed: ${JSON.stringify(errorBody)}`);
+            console.warn('[LinkedIn Validation] ⚠️ /v2/userinfo failed:', errorBody);
         }
     } catch (e: any) {
         result.errors.push(`/v2/userinfo error: ${e.message}`);
@@ -75,9 +80,14 @@ export async function validateLinkedInToken(accessToken: string): Promise<Linked
             result.isValid = true;
             console.log('[LinkedIn Validation] ✅ /v2/me accessible (r_liteprofile present)');
         } else {
-            const error = await meRes.json().catch(() => ({ message: 'Unknown error' }));
-            result.errors.push(`/v2/me failed: ${JSON.stringify(error)}`);
-            console.warn('[LinkedIn Validation] ⚠️ /v2/me failed:', error);
+            let errorBody: any;
+            try {
+                errorBody = await meRes.json();
+            } catch (e) {
+                errorBody = { message: await meRes.text().catch(() => 'Unreadable error') };
+            }
+            result.errors.push(`/v2/me failed: ${JSON.stringify(errorBody)}`);
+            console.warn('[LinkedIn Validation] ⚠️ /v2/me failed:', errorBody);
         }
     } catch (e: any) {
         result.errors.push(`/v2/me error: ${e.message}`);
@@ -139,8 +149,13 @@ export async function getLinkedInProfile(accessToken: string) {
     });
 
     if (!profileRes.ok) {
-        const error = await profileRes.json().catch(() => ({ message: 'Unknown error' }));
-        throw new Error(`LinkedIn profile fetch failed: ${JSON.stringify(error)}`);
+        let errorBody: any;
+        try {
+            errorBody = await profileRes.json();
+        } catch (e) {
+            errorBody = { message: await profileRes.text().catch(() => 'Unreadable error') };
+        }
+        throw new Error(`LinkedIn profile fetch failed: ${JSON.stringify(errorBody)}`);
     }
 
     const profile = await profileRes.json();

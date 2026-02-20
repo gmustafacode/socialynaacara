@@ -80,7 +80,25 @@ export default function QueuePage() {
             case 'FAILED': return 'bg-red-500/10 text-red-400 border-red-500/20';
             case 'PROCESSING': return 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse';
             case 'SCHEDULED': return 'bg-purple-500/10 text-purple-400 border-purple-500/20';
+            case 'PENDING': return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
+            case 'CANCELLED': return 'bg-neutral-500/10 text-neutral-400 border-neutral-500/20';
             default: return 'bg-white/5 text-white/40 border-white/10';
+        }
+    }
+
+    const handleCancelPost = async (postId: string) => {
+        if (!confirm("Are you sure you want to cancel this scheduled post?")) return;
+        try {
+            const res = await fetch(`/api/posts/${postId}`, { method: 'DELETE' })
+            if (res.ok) {
+                toast.success("Post cancelled successfully")
+                fetchData()
+            } else {
+                const data = await res.json()
+                toast.error(data.error || "Failed to cancel post")
+            }
+        } catch (e) {
+            toast.error("Connection error")
         }
     }
 
@@ -279,10 +297,11 @@ export default function QueuePage() {
                                                             try {
                                                                 const res = await fetch(`/api/linkedin/posts/${post.id}/retry`, { method: 'POST' })
                                                                 if (res.ok) {
-                                                                    toast.success("Retry initiated!")
+                                                                    toast.success("Post queued for retry!")
                                                                     fetchData()
                                                                 } else {
-                                                                    toast.error("Retry failed")
+                                                                    const data = await res.json()
+                                                                    toast.error(data.error || "Retry failed")
                                                                 }
                                                             } catch (e) {
                                                                 toast.error("Connection error")
@@ -292,9 +311,21 @@ export default function QueuePage() {
                                                     >
                                                         Retry Dispatch <RefreshCw className="size-3 ml-2" />
                                                     </Button>
+                                                ) : ['SCHEDULED', 'PENDING', 'pending'].includes(post.status) ? (
+                                                    <Button
+                                                        size="sm"
+                                                        onClick={() => handleCancelPost(post.id)}
+                                                        className="rounded-xl bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/20 text-[10px] font-black uppercase tracking-widest h-10 px-6"
+                                                    >
+                                                        Cancel <Trash2 className="size-3 ml-2" />
+                                                    </Button>
+                                                ) : post.status === 'CANCELLED' ? (
+                                                    <Button disabled size="sm" variant="ghost" className="rounded-xl border border-white/5 text-[10px] font-black uppercase tracking-widest h-10 px-6 opacity-30">
+                                                        Cancelled
+                                                    </Button>
                                                 ) : (
                                                     <Button disabled size="sm" variant="ghost" className="rounded-xl border border-white/5 text-[10px] font-black uppercase tracking-widest h-10 px-6 opacity-30">
-                                                        Dispatch Blocked
+                                                        Processing
                                                     </Button>
                                                 )}
                                                 <Button size="sm" variant="ghost" className="rounded-xl border border-white/10 hover:bg-white/5 size-10 p-0">

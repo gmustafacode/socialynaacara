@@ -186,19 +186,40 @@ model ScheduledPost {
   mediaUrl        String?
   targetType      String
   targetId        String?
-  scheduledAt     DateTime?
-  status          String
+  scheduledAt     DateTime
+  timezone        String?
+  status          String        @default("pending")
+  retryCount      Int           @default(0) @map("retry_count")
+  lastError       String?       @map("last_error")
+  publishedAt     DateTime?     @map("published_at")
   externalPostId  String?
+  contentId       String?       @map("content_id")
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
+  
   socialAccount   SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
   @@index([status])
   @@index([scheduledAt])
+  @@index([status, scheduledAt])
   @@map("scheduled_posts")
 }
+
+model CronExecutionLog {
+  id               String    @id @default(uuid())
+  startedAt        DateTime  @map("started_at")
+  finishedAt       DateTime? @map("finished_at")
+  processed        Int       @default(0)
+  published        Int       @default(0)
+  failed           Int       @default(0)
+  executionTimeMs  Int?      @map("execution_time_ms")
+  errorsCount      Int       @default(0) @map("errors_count")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@map("cron_execution_logs")
+}
+
 
 model LinkedInPost {
   id                    String        @id @default(uuid())

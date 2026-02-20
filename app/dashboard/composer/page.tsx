@@ -99,10 +99,10 @@ export default function UniversalComposer() {
                         <span className="text-xs font-bold uppercase tracking-widest">Back to Hub</span>
                     </Link>
                     <h1 className="text-5xl font-black tracking-tight leading-none bg-gradient-to-br from-white via-white to-white/20 bg-clip-text text-transparent">
-                        Universal Engine
+                        Cross-Platform Engine
                     </h1>
                     <p className="text-white/40 text-lg max-w-xl leading-relaxed">
-                        Cross-platform distribution logic powered by n8n automation and secure webhooks.
+                        Post to non-LinkedIn platforms (X, Instagram, TikTok, etc.) via n8n webhook integration.
                     </p>
                 </div>
                 <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/5 border border-white/10">
@@ -180,7 +180,7 @@ export default function UniversalComposer() {
                             >
                                 {loading ? <Loader2 className="animate-spin text-white" /> : (
                                     <div className="flex items-center gap-3">
-                                        Initialize Global Transmission <Send className="size-4" />
+                                        Send via Webhook <Send className="size-4" />
                                     </div>
                                 )}
                             </Button>

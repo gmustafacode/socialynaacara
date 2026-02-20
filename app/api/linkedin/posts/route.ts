@@ -149,7 +149,7 @@ export async function POST(request: Request) {
                 .slice(0, 50); // Reasonable limit to prevent abuse
         }
 
-        // 5. Create LinkedInPost record in DB
+        // 5. Create LinkedInPost record in DB (Content Data Layer)
         const post = await db.linkedInPost.create({
             data: {
                 userId,
@@ -163,54 +163,38 @@ export async function POST(request: Request) {
                 targetType: targetType || "FEED",
                 groupIds: sanitizedGroupIds,
                 visibility: visibility || "PUBLIC",
-                status: scheduledAt ? "SCHEDULED" : "DRAFT",
-                scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+                status: "PENDING", // Ready for the backend cron
+                scheduledAt: scheduledAt ? new Date(scheduledAt) : new Date(),
             }
         });
 
+        // 6. Create ScheduledPost record (The Scheduling Controller)
+        const scheduleTime = scheduledAt ? new Date(scheduledAt) : new Date();
 
-        // 6. Hand-off to Inngest for Background Processing
-        if (scheduledAt) {
-            // Scheduled post: fire the schedule event (Inngest will sleep until the time and then publish)
-            try {
-                await inngest.send({
-                    name: "linkedin/post.schedule",
-                    data: {
-                        postId: post.id,
-                        scheduledAt: new Date(scheduledAt).toISOString()
-                    }
-                });
-            } catch (inngestError: any) {
-                console.error("[LinkedIn API] Inngest schedule dispatch failed:", inngestError);
-                await db.linkedInPost.update({
-                    where: { id: post.id },
-                    data: { status: 'FAILED', errorMessage: `Schedule dispatch failed: ${inngestError.message}` }
-                });
-                return NextResponse.json({ error: "Failed to queue scheduled post" }, { status: 503 });
+        await db.scheduledPost.create({
+            data: {
+                userId,
+                socialAccountId,
+                platform: 'linkedin',
+                postType: postType || "TEXT",
+                contentText: description || "",
+                mediaUrl: (sanitizedMediaUrls && sanitizedMediaUrls.length > 0) ? sanitizedMediaUrls[0] : (thumbnailUrl || null),
+                targetType: targetType || "FEED",
+                targetId: (sanitizedGroupIds && sanitizedGroupIds.length > 0) ? sanitizedGroupIds[0] : null,
+                scheduledAt: scheduleTime,
+                timezone: body.timezone || "UTC",
+                status: "pending",
+                contentId: post.id
             }
-        } else {
-            // Immediate post: fire the publish event
-            try {
-                await inngest.send({
-                    name: "linkedin/post.publish",
-                    data: { postId: post.id }
-                });
-            } catch (inngestError: any) {
-                console.error("[LinkedIn API] Inngest dispatch failed:", inngestError);
-                await db.linkedInPost.update({
-                    where: { id: post.id },
-                    data: { status: 'FAILED', errorMessage: `Background dispatch failed: ${inngestError.message}` }
-                });
-                return NextResponse.json({ error: "Failed to dispatch post to background engine" }, { status: 503 });
-            }
-        }
-
+        });
 
         return NextResponse.json({
             success: true,
-            message: scheduledAt ? "Successfully scheduled" : "Publishing started",
+            message: scheduledAt ? "Post scheduled successfully" : "Post queued for publishing",
+            scheduled_at_utc: scheduleTime.toISOString(),
             postId: post.id
         });
+
 
     } catch (error: any) {
         console.error("[LinkedIn API] Create Post Error:", error);

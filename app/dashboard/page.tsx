@@ -75,20 +75,23 @@ export default function DashboardPage() {
                 <DashboardCard
                     title="Connected Accounts"
                     icon={Share2}
-                    value={loading ? "..." : stats.accountsCount}
+                    value={stats.accountsCount}
                     description="Active platforms"
+                    loading={loading}
                 />
                 <DashboardCard
                     title="Content Queue"
                     icon={Layers}
-                    value={loading ? "..." : stats.pendingContent}
+                    value={stats.pendingContent}
                     description="Posts waiting"
+                    loading={loading}
                 />
                 <DashboardCard
                     title="AI Actions"
                     icon={Sparkles}
-                    value={loading ? "..." : stats.aiLogsCount}
+                    value={stats.aiLogsCount}
                     description="decisions made"
+                    loading={loading}
                 />
                 <DashboardCard
                     title="Engagement"
@@ -207,7 +210,7 @@ export default function DashboardPage() {
     )
 }
 
-function DashboardCard({ title, icon: Icon, value, description }: any) {
+function DashboardCard({ title, icon: Icon, value, description, loading }: any) {
     return (
         <Card className="bg-neutral-900 border-white/10 text-white hover:border-purple-500/30 transition-all cursor-default">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -217,7 +220,11 @@ function DashboardCard({ title, icon: Icon, value, description }: any) {
                 <Icon className="h-4 w-4 text-white/40" />
             </CardHeader>
             <CardContent>
-                <div className="text-2xl font-bold">{value}</div>
+                {loading ? (
+                    <div className="h-8 w-16 bg-white/5 rounded animate-pulse" />
+                ) : (
+                    <div className="text-2xl font-bold">{value}</div>
+                )}
                 <p className="text-xs text-white/40">
                     {description}
                 </p>

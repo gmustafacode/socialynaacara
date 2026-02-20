@@ -1,10 +1,11 @@
-
 import 'dotenv/config';
 import db from './lib/db';
 import cron from 'node-cron';
 import { LinkedInPostingService } from './lib/linkedin-posting-service';
 import { getValidAccessToken } from './lib/oauth';
 import { getBaseUrl } from './lib/utils';
+import { checkPostingLimits } from './lib/limits';
+import { inngest } from './lib/inngest/client';
 
 /**
  * SOCIALSYNCARA BACKEND CRON WORKER (v3 - Database Driven)
@@ -17,26 +18,49 @@ import { getBaseUrl } from './lib/utils';
  */
 
 let isRunning = false;
+let consecutiveDbFailures = 0;
+const MAX_SKIP_FAILURES = 5; // After 5 consecutive DB failures, start skipping cycles
+
+/**
+ * Quick DB health check with a 10-second timeout.
+ * Returns true if DB is reachable, false otherwise.
+ */
+async function isDbReachable(): Promise<boolean> {
+    try {
+        await Promise.race([
+            db.$queryRaw`SELECT 1`,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('DB health check timeout')), 5000))
+        ]);
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 /**
  * Resets jobs that have been stuck in 'processing' for too long.
  */
 async function recoverStaleJobs() {
-    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    try {
+        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
 
-    const stuckPosts = await db.scheduledPost.updateMany({
-        where: {
-            status: 'processing',
-            updatedAt: { lte: thirtyMinutesAgo }
-        },
-        data: {
-            status: 'pending',
-            lastError: 'Stale post recovery: Reset after processing timeout.'
+        const stuckPosts = await db.scheduledPost.updateMany({
+            where: {
+                status: 'processing',
+                updatedAt: { lte: thirtyMinutesAgo }
+            },
+            data: {
+                status: 'pending',
+                lastError: 'Stale post recovery: Reset after processing timeout.'
+            }
+        });
+
+        if (stuckPosts.count > 0) {
+            console.log(`[WORKER] Recovered ${stuckPosts.count} stale scheduled posts.`);
         }
-    });
-
-    if (stuckPosts.count > 0) {
-        console.log(`[WORKER] Recovered ${stuckPosts.count} stale scheduled posts.`);
+    } catch (err: any) {
+        // Non-fatal: don't let stale job recovery kill the entire cycle
+        console.warn(`[WORKER] Stale job recovery failed (non-fatal): ${err.message}`);
     }
 }
 
@@ -48,6 +72,38 @@ async function checkAndProcess() {
 
     isRunning = true;
     const startedAt = new Date();
+
+    // Backoff: if DB has been unreachable for multiple cycles, skip to avoid log spam
+    if (consecutiveDbFailures >= MAX_SKIP_FAILURES) {
+        // Only attempt a health check every 5th failure to reduce noise
+        if (consecutiveDbFailures % 5 !== 0) {
+            consecutiveDbFailures++;
+            isRunning = false;
+            return; // Silent skip
+        }
+    }
+
+    // Quick DB health check before doing any work
+    const dbOk = await isDbReachable();
+    if (!dbOk) {
+        consecutiveDbFailures++;
+        if (consecutiveDbFailures <= 3) {
+            console.warn(`[WORKER] Database unreachable (attempt ${consecutiveDbFailures}). Will retry next cycle.`);
+        } else if (consecutiveDbFailures === MAX_SKIP_FAILURES) {
+            console.warn(`[WORKER] Database unreachable for ${consecutiveDbFailures} consecutive cycles. Reducing log frequency.`);
+        } else if (consecutiveDbFailures % 5 === 0) {
+            console.warn(`[WORKER] Database still unreachable (${consecutiveDbFailures} cycles). Waiting...`);
+        }
+        isRunning = false;
+        return;
+    }
+
+    // DB is back! Reset failure counter
+    if (consecutiveDbFailures > 0) {
+        console.log(`[WORKER] Database connection restored after ${consecutiveDbFailures} failed attempts.`);
+        consecutiveDbFailures = 0;
+    }
+
     console.log(`[WORKER] [${startedAt.toISOString()}] Starting cron cycle...`);
 
     let processedCount = 0;
@@ -60,14 +116,18 @@ async function checkAndProcess() {
 
         // 1. Fetch due posts with Row Locking (PostgreSQL specific)
         // SKIP LOCKED ensures horizontal scalability without double-processing
-        const duePostIds: { id: string }[] = await db.$queryRaw`
-            SELECT id FROM "scheduled_posts"
-            WHERE status = 'pending'
-            AND "scheduledAt" <= NOW()
-            ORDER BY "scheduledAt" ASC
-            LIMIT 50
-            FOR UPDATE SKIP LOCKED;
-        `;
+        // Use Promise.race to ensure a database hang doesn't block the worker indefinitely
+        const duePostIds: { id: string }[] = await Promise.race([
+            db.$queryRaw`
+                SELECT id FROM "scheduled_posts"
+                WHERE status = 'pending'
+                AND "scheduledAt" <= NOW()
+                ORDER BY "scheduledAt" ASC
+                LIMIT 50
+                FOR UPDATE SKIP LOCKED;
+            `,
+            new Promise<any>((_, reject) => setTimeout(() => reject(new Error('Database query timeout (15s)')), 15000))
+        ]);
 
         if (duePostIds.length === 0) {
             isRunning = false; // Early exit
@@ -91,6 +151,22 @@ async function checkAndProcess() {
 
                 console.log(`[WORKER] Processing ${post.platform} post: ${id}`);
 
+                // 2.5 Rate Limit Check (Production Safety)
+                const limitCheck = await checkPostingLimits(post.userId, post.platform);
+                if (!limitCheck.allowed) {
+                    console.log(`[WORKER] Rate limit hit for user ${post.userId} on ${post.platform}: ${limitCheck.error}`);
+                    // Revert to pending and push forward by 5 minutes to avoid immediate thrashing
+                    await db.scheduledPost.update({
+                        where: { id },
+                        data: {
+                            status: 'pending',
+                            scheduledAt: new Date(Date.now() + 5 * 60 * 1000),
+                            lastError: `Rate Limit: ${limitCheck.error}`
+                        }
+                    });
+                    continue;
+                }
+
                 // 3. Worker Logic: Prepare and Prepare for Publish
                 const driftMs = Date.now() - post.scheduledAt.getTime();
                 console.log(`[WORKER] Processing ${post.platform} post: ${id} (Drift: ${driftMs}ms)`);
@@ -100,32 +176,21 @@ async function checkAndProcess() {
                 if (post.platform === 'linkedin') {
                     if (!post.contentId) throw new Error("LinkedIn post missing contentId");
 
-                    // Trigger Existing Worker Logic (The Ingestion Layer)
-                    result = await LinkedInPostingService.publishPost(post.contentId);
+                    // DISPATCH TO INNGEST (Primary Engine)
+                    console.log(`[WORKER] Dispatching LinkedIn post ${id} to Inngest engine...`);
 
-                    if (result.status === 'PUBLISHED' || result.status === 'PARTIAL_SUCCESS') {
-                        // Success path
-                        await db.scheduledPost.update({
-                            where: { id },
-                            data: {
-                                status: 'published',
-                                publishedAt: new Date(),
-                                externalPostId: result.results?.[0] || null,
-                                updatedAt: new Date()
-                            }
-                        });
+                    await inngest.send({
+                        name: "linkedin/post.publish",
+                        data: {
+                            postId: post.contentId,
+                            scheduledPostId: post.id
+                        }
+                    });
 
-                        // Ensure LinkedInPost table is also marked published
-                        await db.linkedInPost.update({
-                            where: { id: post.contentId },
-                            data: { status: 'PUBLISHED' }
-                        }).catch(() => { });
-
-                        publishedCount++;
-                        console.log(`[WORKER] Successfully published LinkedIn post: ${id}`);
-                    } else {
-                        throw new Error(result.errors?.join(' | ') || "LinkedIn publishing failed with unknown error");
-                    }
+                    // We don't mark as 'published' here anymore. 
+                    // Inngest will handle the final status update.
+                    // The worker just successfully 'dispatched'.
+                    publishedCount++;
                 } else if (post.platform === 'rss' || post.platform === 'manual') {
                     // ContentQueue based posts
                     const accessToken = await getValidAccessToken(post.socialAccountId);
@@ -214,30 +279,39 @@ async function checkAndProcess() {
             }
         }
     } catch (globalError: any) {
-        console.error("[WORKER] [CRITICAL] Global execution error:", globalError.message);
-    } finally {
-        const finishedAt = new Date();
-        const executionTimeMs = finishedAt.getTime() - startedAt.getTime();
-
-        // 4. Log execution summary
-        try {
-            await db.cronExecutionLog.create({
-                data: {
-                    startedAt,
-                    finishedAt,
-                    processed: processedCount,
-                    published: publishedCount,
-                    failed: failedCount,
-                    executionTimeMs,
-                    errorsCount
-                }
-            });
-        } catch (logError) {
-            console.error("[WORKER] Failed to save execution log:", logError);
+        // If it's a connection error (P1001), log a simple warning instead of a critical stack trace
+        if (globalError.code === 'P1001' || globalError.message?.includes('Can\'t reach database')) {
+            console.warn(`[WORKER] Cycle aborted: Database connection lost.`);
+            consecutiveDbFailures++;
+        } else {
+            console.error("[WORKER] [CRITICAL] Global execution error:", globalError.message);
         }
+    } finally {
+        try {
+            const finishedAt = new Date();
+            const executionTimeMs = finishedAt.getTime() - startedAt.getTime();
 
-        isRunning = false;
-        console.log(`[WORKER] Cycle complete. Processed: ${processedCount}, Success: ${publishedCount}, Failed: ${failedCount}`);
+            // 4. Log execution summary (non-fatal, silent on failure)
+            if (processedCount > 0 || publishedCount > 0) {
+                await db.cronExecutionLog.create({
+                    data: {
+                        startedAt,
+                        finishedAt,
+                        processed: processedCount,
+                        published: publishedCount,
+                        failed: failedCount,
+                        executionTimeMs,
+                        errorsCount
+                    }
+                }).catch(() => { });
+            }
+
+            console.log(`[WORKER] Cycle complete. Processed: ${processedCount}, Success: ${publishedCount}, Failed: ${failedCount}`);
+        } catch (finalErr) {
+            // Absolute last resort safety
+        } finally {
+            isRunning = false;
+        }
     }
 }
 

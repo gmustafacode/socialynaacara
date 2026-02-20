@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import db from "@/lib/db"
-import { inngest } from "@/lib/inngest/client"
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
     const params = await context.params
@@ -14,8 +13,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     try {
+        const userId = (session.user as any).id
+
+        // 1. Find the original LinkedIn post
         const post = await db.linkedInPost.findUnique({
-            where: { id, userId: (session.user as any).id },
+            where: { id, userId },
             include: { socialAccount: true }
         })
 
@@ -23,24 +25,54 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
             return NextResponse.json({ error: "Post not found" }, { status: 404 })
         }
 
-        // Reset status to DRAFT or PENDING
+        if (post.status === 'PUBLISHED') {
+            return NextResponse.json({ error: "Post is already published" }, { status: 400 })
+        }
+
+        // 2. Reset the LinkedInPost status
         await db.linkedInPost.update({
             where: { id },
             data: {
-                status: post.scheduledAt ? 'SCHEDULED' : 'PENDING',
+                status: 'PENDING',
                 errorMessage: null
             }
         })
 
-        // Trigger Inngest
-        await inngest.send({
-            name: "linkedin/post.publish",
-            data: {
-                postId: post.id,
-            }
+        // 3. Find or create a ScheduledPost entry for the cron worker to pick up
+        const existingScheduled = await db.scheduledPost.findFirst({
+            where: { contentId: id, userId }
         })
 
-        return NextResponse.json({ success: true, message: "Retry initiated" })
+        if (existingScheduled) {
+            // Reset the existing scheduled post for re-processing
+            await db.scheduledPost.update({
+                where: { id: existingScheduled.id },
+                data: {
+                    status: 'pending',
+                    scheduledAt: new Date(), // Process immediately
+                    updatedAt: new Date()
+                }
+            })
+        } else {
+            // Create a new scheduled post entry so the cron worker picks it up
+            await db.scheduledPost.create({
+                data: {
+                    userId,
+                    socialAccountId: post.socialAccountId,
+                    platform: 'linkedin',
+                    postType: post.postType || 'TEXT',
+                    contentText: post.description || '',
+                    mediaUrl: post.mediaUrls?.[0] || post.thumbnailUrl || null,
+                    targetType: post.targetType || 'FEED',
+                    targetId: post.groupIds?.[0] || null,
+                    scheduledAt: new Date(), // Process immediately
+                    status: 'pending',
+                    contentId: post.id
+                }
+            })
+        }
+
+        return NextResponse.json({ success: true, message: "Post queued for retry. It will be processed within 1 minute." })
     } catch (error) {
         console.error("Failed to retry post:", error)
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })

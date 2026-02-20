@@ -200,7 +200,13 @@ export async function refreshAccessToken(accountId: string) {
             signal: AbortSignal.timeout(20000) // 20s timeout
         });
 
-        const data = await response.json();
+        let data: any;
+        try {
+            data = await response.json();
+        } catch (e) {
+            const text = await response.text().catch(() => "Unreadable response");
+            data = { error: "non_json_error", message: text.substring(0, 200) };
+        }
 
         if (!response.ok) {
             console.error(`[OAuth Refresh] API Failed for account ${accountId} (${account.platform}):`, {

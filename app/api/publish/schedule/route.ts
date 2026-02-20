@@ -56,26 +56,32 @@ export async function POST(request: Request) {
             }
         });
 
-        // 4. Trigger Inngest Workflow
-        const { inngest } = await import('@/lib/inngest/client');
+        // 4. Create ScheduledPost record (New Backend-Driven Scheduling)
+        const scheduleTime = scheduledFor ? new Date(scheduledFor) : new Date();
 
-        if (scheduledFor) {
-            await inngest.send({
-                name: 'linkedin/post.schedule',
-                data: {
-                    postId: queuedItem.id, // Note: This assumes we are creating a LinkedInPost record as well, or we should use ContentQueue ID
-                    scheduledAt: new Date(scheduledFor).toISOString()
-                }
-            });
-        } else {
-            // Immediate publish if no schedule date
-            await inngest.send({
-                name: 'linkedin/post.publish',
-                data: { postId: queuedItem.id }
-            });
-        }
+        await db.scheduledPost.create({
+            data: {
+                userId,
+                socialAccountId: accountId,
+                platform: platform || account.platform,
+                postType: contentType || "ARTICLE",
+                contentText: contentData.description || contentData.title || "",
+                mediaUrl: contentData.thumbnailUrl || null,
+                targetType: "FEED",
+                scheduledAt: scheduleTime,
+                timezone: body.timezone || "UTC",
+                status: "pending",
+                contentId: queuedItem.id // Link to the content record
+            }
+        });
 
-        return NextResponse.json({ success: true, itemId: queuedItem.id });
+        return NextResponse.json({
+            success: true,
+            message: "Post scheduled successfully",
+            scheduled_at_utc: scheduleTime.toISOString(),
+            itemId: queuedItem.id
+        });
+
 
     } catch (error) {
         console.error("Scheduling error:", error);

@@ -12,8 +12,10 @@ export const publishLinkedInPost = inngest.createFunction(
         id: "publish-linkedin-post",
         retries: 3,
         onFailure: async ({ event, error, step }) => {
-            const { postId } = event.data as any;
+            const { postId, scheduledPostId } = event.data as any;
             console.error(`[Inngest] Critical failure for post ${postId} after retries:`, error);
+
+            // 1. Update LinkedInPost
             await db.linkedInPost.update({
                 where: { id: postId },
                 data: {
@@ -21,11 +23,22 @@ export const publishLinkedInPost = inngest.createFunction(
                     errorMessage: error.message || "Unknown error (Retries exhausted)"
                 }
             });
+
+            // 2. Update ScheduledPost if applicable
+            if (scheduledPostId) {
+                await db.scheduledPost.update({
+                    where: { id: scheduledPostId },
+                    data: {
+                        status: 'failed',
+                        lastError: error.message || "Unknown error (Retries exhausted)"
+                    }
+                }).catch(() => { });
+            }
         }
     },
     { event: "linkedin/post.publish" },
     async ({ event, step }) => {
-        const { postId } = event.data;
+        const { postId, scheduledPostId } = event.data;
 
         // 1. Mark as Processing (Atomic check to prevent race conditions)
         const post = await step.run("mark-processing", async () => {
@@ -66,67 +79,43 @@ export const publishLinkedInPost = inngest.createFunction(
             return await LinkedInPostingService.publishPost(postId);
         });
 
+        // 3. Post-Publish Sync (Success)
+        if (scheduledPostId) {
+            await step.run("sync-scheduled-post", async () => {
+                const r = result as any;
+                const externalId = r.results?.[0] || null;
+                await db.scheduledPost.update({
+                    where: { id: scheduledPostId },
+                    data: {
+                        status: 'published',
+                        publishedAt: new Date(),
+                        externalPostId: externalId
+                    }
+                });
+                console.log(`[Inngest] Synced ScheduledPost ${scheduledPostId} status to published.`);
+            });
+        }
+
         return { success: true, ...result };
     }
 );
 
 
 /**
- * Scheduler Engine: Delays execution until the scheduled time, then triggers publish.
- * Handles the `linkedin/post.schedule` event fired by /api/publish/schedule.
+ * DEPRECATED: Scheduler Engine
+ * As of v3, scheduling is handled by the backend cron (automation-worker.ts)
+ * and the ScheduledPost table. This function is kept momentarily for 
+ * inflight jobs but should not be triggered by new API calls.
  */
+/*
 export const scheduleLinkedInPost = inngest.createFunction(
     {
         id: "schedule-linkedin-post",
-        retries: 2,
-        onFailure: async ({ event, error }) => {
-            const { postId } = event.data as any;
-            console.error(`[Inngest] Scheduling failure for post ${postId}:`, error);
-            await db.linkedInPost.update({
-                where: { id: postId },
-                data: {
-                    status: 'FAILED',
-                    errorMessage: `Scheduling engine error: ${error.message}`
-                }
-            }).catch(() => { });
-        }
-    },
-    { event: "linkedin/post.schedule" },
-    async ({ event, step }) => {
-        const { postId, scheduledAt } = event.data as { postId: string; scheduledAt: string };
-
-        // 1. Confirm post exists and mark it SCHEDULED
-        const post = await step.run("confirm-and-mark-scheduled", async () => {
-            return await db.linkedInPost.update({
-                where: { id: postId },
-                data: { status: 'SCHEDULED' }
-            });
-        });
-
-        if (!post) {
-            return { skipped: true, reason: "post_not_found" };
-        }
-
-        // 2. Wait until the scheduled time using Inngest's durable sleep
-        await step.sleepUntil("wait-until-scheduled-time", scheduledAt);
-
-        // 3. Mark as PENDING so publishLinkedInPost can claim it
-        await step.run("mark-as-pending", async () => {
-            await db.linkedInPost.update({
-                where: { id: postId, status: 'SCHEDULED' },
-                data: { status: 'PENDING' }
-            });
-        });
-
-        // 4. Fire the publish event
-        await step.sendEvent("trigger-publish", {
-            name: 'linkedin/post.publish',
-            data: { postId }
-        });
-
-        return { scheduled: true, postId, firedAt: new Date().toISOString() };
+        ... (commented out code)
     }
 );
+*/
+
 
 
 /**

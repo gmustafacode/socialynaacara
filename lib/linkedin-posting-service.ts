@@ -18,37 +18,74 @@ export class LinkedInPostingService {
     /**
      * Publishes a post to LinkedIn (Feed and/or Groups).
      */
-    static async publishPost(postId: string) {
-        const post = await db.linkedInPost.findUnique({
+    /**
+     * Publishes a post to LinkedIn (Feed and/or Groups).
+     * Supports both LinkedInPost ID and ContentQueue ID.
+     */
+    static async publishPost(postId: string, socialAccountId?: string) {
+        // 1. Fetch content from multiple possible sources
+        let isLinkedInTable = true;
+        let content: any = await db.linkedInPost.findUnique({
             where: { id: postId },
             include: { socialAccount: true }
         });
 
-        if (!post) throw new Error("Post not found");
+        if (!content) {
+            isLinkedInTable = false;
+            // Fallback: Try ContentQueue (General Scheduler)
+            const queuedItem = await db.contentQueue.findUnique({
+                where: { id: postId }
+            });
+
+            if (queuedItem) {
+                // If we're coming from ContentQueue, we MUST have a socialAccountId
+                if (!socialAccountId) {
+                    throw new Error("Social account ID is required for generic content queue items");
+                }
+
+                const account = await db.socialAccount.findUnique({ where: { id: socialAccountId } });
+                if (!account) throw new Error("Linked social account not found");
+
+                // Map ContentQueue to LinkedInPost-like structure
+                content = {
+                    id: queuedItem.id,
+                    userId: queuedItem.userId,
+                    socialAccountId: account.id,
+                    postType: queuedItem.contentType === 'video' ? 'VIDEO' : (queuedItem.mediaUrl ? 'IMAGE_TEXT' : 'TEXT'),
+                    youtubeUrl: queuedItem.sourceUrl?.includes('youtube.com') || queuedItem.sourceUrl?.includes('youtu.be') ? queuedItem.sourceUrl : null,
+                    title: queuedItem.title,
+                    description: queuedItem.summary || queuedItem.title || "",
+                    thumbnailUrl: queuedItem.mediaUrl,
+                    mediaUrls: queuedItem.mediaUrl ? [queuedItem.mediaUrl] : [],
+                    targetType: 'FEED',
+                    visibility: 'PUBLIC',
+                    status: 'PENDING',
+                    socialAccount: account,
+                    groupIds: []
+                };
+            }
+        }
+
+        if (!content) throw new Error(`Post or Content ${postId} not found in any supported table.`);
 
         // Idempotency Check: Prevent double-posting
-        if (post.status === 'PUBLISHED' && post.linkedinPostUrn) {
-            console.log(`[LinkedInPosting] Post ${postId} already published. URN: ${post.linkedinPostUrn}`);
+        if (content.status === 'PUBLISHED' && content.linkedinPostUrn) {
+            console.log(`[LinkedInPosting] Post ${postId} already published. URN: ${content.linkedinPostUrn}`);
             return {
                 status: 'PUBLISHED',
-                results: post.linkedinPostUrn.split(', '),
+                results: content.linkedinPostUrn.split(', '),
                 errors: []
             };
         }
 
         // 1. Get valid access token (refreshes if needed)
-        const accessToken = await LinkedInAuthService.getValidToken(post.socialAccountId);
-
-        // Token validation logging
-        console.log('[LinkedIn Debug] Token length:', accessToken.length);
-        console.log('[LinkedIn Debug] Token prefix:', accessToken.substring(0, 20) + '...');
+        const accessToken = await LinkedInAuthService.getValidToken(content.socialAccountId);
 
         // 2. Resolve LinkedIn Identity (URN)
-        // Optimization: Use cached URN from DB if available
-        let authorUrn = post.socialAccount.platformAccountId ?
-            (post.socialAccount.platformAccountId.startsWith('urn:li:') ?
-                post.socialAccount.platformAccountId :
-                `urn:li:person:${post.socialAccount.platformAccountId}`) :
+        let authorUrn = content.socialAccount.platformAccountId ?
+            (content.socialAccount.platformAccountId.startsWith('urn:li:') ?
+                content.socialAccount.platformAccountId :
+                `urn:li:person:${content.socialAccount.platformAccountId}`) :
             null;
 
         if (!authorUrn) {
@@ -60,7 +97,7 @@ export class LinkedInPostingService {
                 // Save resolved URN for future use
                 if (authorUrn) {
                     await db.socialAccount.update({
-                        where: { id: post.socialAccountId },
+                        where: { id: content.socialAccountId },
                         data: { platformAccountId: authorUrn.replace('urn:li:person:', '') }
                     });
                 }
@@ -72,142 +109,119 @@ export class LinkedInPostingService {
         if (!authorUrn) throw new Error("Could not resolve LinkedIn User ID");
 
         // Validation
-        const description = post.description || "";
+        const description = content.description || "";
         if (description.length > 3000) {
             throw new Error("LinkedIn description exceeds 3000 character limit");
         }
-        if (description.length === 0 && !post.mediaUrls?.length && !post.youtubeUrl) {
+        if (description.length === 0 && !content.mediaUrls?.length && !content.youtubeUrl) {
             throw new Error("Post content cannot be empty (must have text or media)");
         }
 
         const results: string[] = [];
         const errors: string[] = [];
 
-        // 3. Auto-generate or Scrape thumbnail for maximum fidelity
-        let finalThumbnailUrl = post.thumbnailUrl;
-        const targetUrl = post.youtubeUrl || (post.mediaUrls.length > 0 ? post.mediaUrls[0] : null);
+        // 3. Auto-generate or Scrape thumbnail
+        let finalThumbnailUrl = content.thumbnailUrl;
+        const targetUrl = content.youtubeUrl || (content.mediaUrls?.length > 0 ? content.mediaUrls[0] : null);
 
         if (!finalThumbnailUrl && targetUrl) {
-            if (post.youtubeUrl) {
-                const metadata = LinkedInPostingService.getYoutubeMetadata(post.youtubeUrl);
+            if (content.youtubeUrl) {
+                const metadata = LinkedInPostingService.getYoutubeMetadata(content.youtubeUrl);
                 if (metadata) {
                     try {
-                        // Check if maxresdefault exists (HEAD request)
-                        await axios.head(metadata.thumbnailUrl);
-                        console.log(`[LinkedInPosting] Using maxres thumbnail: ${metadata.thumbnailUrl}`);
+                        await axios.head(metadata.thumbnailUrl, { timeout: 5000 });
                         finalThumbnailUrl = metadata.thumbnailUrl;
                     } catch (e) {
-                        const hqUrl = `https://i.ytimg.com/vi/${metadata.videoId}/hqdefault.jpg`;
-                        console.log(`[LinkedInPosting] maxres failed, falling back to HQ: ${hqUrl}`);
-                        finalThumbnailUrl = hqUrl;
+                        finalThumbnailUrl = `https://i.ytimg.com/vi/${metadata.videoId}/hqdefault.jpg`;
                     }
                 }
-            } else if (post.postType === 'ARTICLE' || post.targetType === 'FEED') {
-                // Proactive Scraper: If no thumbnail exists for a link, try to pull OG image
+            } else {
+                // Proactive Scraper for generic links
                 try {
-                    console.log(`[LinkedInPosting] Attempting to scrape OG metadata for: ${targetUrl}`);
                     const response = await axios.get(targetUrl, {
                         timeout: 10000,
-                        maxContentLength: 1024 * 1024, // 1MB HTML limit
+                        maxContentLength: 1024 * 1024,
                         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SocialSyncBot/1.0)' }
                     });
                     const html = response.data;
-                    const ogMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
-                        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
-
-                    if (ogMatch && ogMatch[1]) {
-                        finalThumbnailUrl = ogMatch[1];
-                        console.log(`[LinkedInPosting] Scraped hero image: ${finalThumbnailUrl}`);
-                    }
-                } catch (e: any) {
-                    console.warn(`[LinkedInPosting] Scraper failed for ${targetUrl}:`, e.message);
-                }
+                    const ogMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+                    if (ogMatch && ogMatch[1]) finalThumbnailUrl = ogMatch[1];
+                } catch (e) { }
             }
         }
 
         // 4. Handle Feed Post
-        if (post.targetType === 'FEED' || !post.targetType) { // Default to FEED if not set
+        if (content.targetType === 'FEED' || !content.targetType) {
             try {
                 const urn = await this.createUgcPost(accessToken, authorUrn, {
-                    postType: post.postType,
-                    title: post.title || undefined,
+                    postType: content.postType,
+                    title: content.title || undefined,
                     description: description,
-                    youtubeUrl: post.youtubeUrl || undefined,
+                    youtubeUrl: content.youtubeUrl || undefined,
                     thumbnailUrl: finalThumbnailUrl || undefined,
-                    mediaUrls: post.mediaUrls,
-                    visibility: post.visibility === 'CONTAINER' ? 'CONTAINER' : 'PUBLIC'
+                    mediaUrls: content.mediaUrls,
+                    visibility: content.visibility === 'CONTAINER' ? 'CONTAINER' : 'PUBLIC'
                 });
                 results.push(urn);
             } catch (err: any) {
                 const data = err.response?.data;
                 const errorMsg = data?.message || err.message || "Unknown error";
-                const serviceCode = data?.serviceErrorCode ? ` (Code: ${data.serviceErrorCode})` : "";
-
-                console.error("[LinkedInPosting] Feed post failed:", errorMsg + serviceCode);
-
-                // Duplicate Content Rescue: If LinkedIn says it's a duplicate, extract the URN and treat as success
                 const duplicateMatch = errorMsg.match(/duplicate of (urn:li:[a-zA-Z0-9:]+)/);
+
                 if (duplicateMatch && duplicateMatch[1]) {
-                    const existingUrn = duplicateMatch[1];
-                    console.log(`[LinkedInPosting] Duplicate detected. Rescuing existing URN: ${existingUrn}`);
-                    results.push(existingUrn);
+                    results.push(duplicateMatch[1]);
                 } else {
-                    errors.push(`Feed post failed: ${errorMsg}${serviceCode}`);
+                    errors.push(`Feed post failed: ${errorMsg}`);
                 }
             }
         }
 
-        // 5. Handle Group Posts - Sequential Execution (Better for Rate Limits)
-        if (post.targetType === 'GROUP' && post.groupIds && post.groupIds.length > 0) {
-            for (const groupId of post.groupIds) {
+        // 5. Handle Group Posts
+        if (content.targetType === 'GROUP' && content.groupIds?.length > 0) {
+            for (const groupId of content.groupIds) {
                 try {
-                    // Small delay between groups to avoid burst limits
-                    if (post.groupIds.indexOf(groupId) > 0) {
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                    }
-
                     const urn = await this.createUgcPost(accessToken, authorUrn, {
-                        postType: post.postType,
-                        title: post.title || undefined,
+                        postType: content.postType,
+                        title: content.title || undefined,
                         description: description,
-                        youtubeUrl: post.youtubeUrl || undefined,
+                        youtubeUrl: content.youtubeUrl || undefined,
                         thumbnailUrl: finalThumbnailUrl || undefined,
-                        mediaUrls: post.mediaUrls,
+                        mediaUrls: content.mediaUrls,
                         visibility: 'CONTAINER',
                         groupIds: [groupId]
                     });
                     results.push(urn);
                 } catch (err: any) {
-                    const data = err.response?.data;
-                    const errorMsg = data?.message || err.message || "Unknown error";
-                    const serviceCode = data?.serviceErrorCode ? ` (Code: ${data.serviceErrorCode})` : "";
-
-                    console.error(`[LinkedInPosting] Group post failed for ${groupId}:`, errorMsg + serviceCode);
-
-                    // Duplicate Content Rescue for Groups
-                    const duplicateMatch = errorMsg.match(/duplicate of (urn:li:[a-zA-Z0-9:]+)/);
-                    if (duplicateMatch && duplicateMatch[1]) {
-                        results.push(duplicateMatch[1]);
-                    } else {
-                        errors.push(`Group ${groupId} failed: ${errorMsg}${serviceCode}`);
-                    }
+                    const errorMsg = err.response?.data?.message || err.message;
+                    errors.push(`Group ${groupId} failed: ${errorMsg}`);
                 }
             }
         }
 
-        // 5. Update Post Status
-        const status = errors.length === 0 ? 'PUBLISHED' : (results.length > 0 ? 'PARTIAL_SUCCESS' : 'FAILED');
-        await db.linkedInPost.update({
-            where: { id: postId },
-            data: {
-                status,
-                linkedinPostUrn: results.join(', '),
-                errorMessage: errors.length > 0 ? errors.slice(0, 5).join(' | ') : null, // Cap error message length
-                updatedAt: new Date()
-            }
-        });
+        // 6. Update Status (Source agnostic)
+        const finalStatus = errors.length === 0 ? 'PUBLISHED' : (results.length > 0 ? 'PARTIAL_SUCCESS' : 'FAILED');
+        const updatePayload = {
+            status: finalStatus,
+            linkedinPostUrn: results.join(', '),
+            errorMessage: errors.length > 0 ? errors.join(' | ').substring(0, 1000) : null,
+            updatedAt: new Date()
+        };
 
-        return { status, results, errors };
+        // Update the actual source table
+        if (isLinkedInTable) {
+            await db.linkedInPost.update({ where: { id: postId }, data: updatePayload });
+        } else {
+            // Update ContentQueue if that was the source
+            await db.contentQueue.update({
+                where: { id: postId },
+                data: {
+                    status: finalStatus === 'PUBLISHED' ? 'published' : (finalStatus === 'FAILED' ? 'failed' : 'pending'),
+                    publishedAt: finalStatus === 'PUBLISHED' ? new Date() : null
+                }
+            }).catch(() => { });
+        }
+
+        return { status: finalStatus, results, errors };
     }
 
     /**

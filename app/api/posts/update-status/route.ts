@@ -18,21 +18,29 @@ export async function POST(req: Request) {
             return new NextResponse("Missing fields", { status: 400 });
         }
 
-        // Validate status enum
-        const validStatuses = ["DRAFT", "SCHEDULED", "PUBLISHED", "FAILED"];
-        if (!validStatuses.includes(status)) {
-            return new NextResponse("Invalid status", { status: 400 });
+        // 2. Validate and Normalize Status
+        const validStatuses = ["pending", "processing", "published", "failed", "cancelled"];
+
+        let normalizedStatus = status.toLowerCase();
+        if (status === "PUBLISHED") normalizedStatus = "published";
+        if (status === "FAILED") normalizedStatus = "failed";
+        if (status === "SCHEDULED") normalizedStatus = "pending";
+
+        if (!validStatuses.includes(normalizedStatus)) {
+            return new NextResponse(`Invalid status: ${status}`, { status: 400 });
         }
 
+        // 3. Update Record
         await db.scheduledPost.update({
             where: { id: postId },
             data: {
-                status,
+                status: normalizedStatus,
                 externalPostId: externalPostId || undefined,
+                lastError: error || undefined,
                 updatedAt: new Date(),
-                // Optionally log error in a separate field if we added one, or just in status
             }
         });
+
 
         return NextResponse.json({ success: true });
     } catch (error) {
