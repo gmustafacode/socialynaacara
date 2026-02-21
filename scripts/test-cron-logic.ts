@@ -1,8 +1,8 @@
 import db from '../lib/db';
 import { inngest } from '../lib/inngest/client';
 import { checkPostingLimits } from '../lib/limits';
-import { getValidAccessToken } from '../oauth';
-import { getBaseUrl } from '../utils';
+import { getValidAccessToken } from '../lib/oauth';
+import { getBaseUrl } from '../lib/utils';
 
 async function testCronLogic() {
     console.log("--- Starting Manual Cron Logic Test ---");

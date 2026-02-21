@@ -32,16 +32,18 @@ async function fix() {
                 console.log(`Executing: ${q.substring(0, 50)}...`);
                 await client.query(q);
                 console.log("✅ Success");
-            } catch (e) {
+            } catch (error: unknown) {
+                const e = error as Error;
                 console.error("❌ Failed:", e.message);
-                if (e.message.includes('timeout')) {
+                if (e.message?.includes('timeout')) {
                     console.log("Stopping due to timeout. Locks are still present.");
                     break;
                 }
             }
         }
-    } catch (e) {
-        console.error("Connection error:", e);
+    } catch (error: unknown) {
+        const e = error as Error;
+        console.error("Connection error:", e.message);
     } finally {
         await client.end();
     }
