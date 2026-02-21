@@ -285,7 +285,7 @@ export const aiContentAnalysis = inngest.createFunction(
     },
     [
         { event: "ai/content.analyze" },
-        { cron: "*/30 * * * *" } // Run every 30 minutes by default
+        { cron: "*/10 * * * *" } // Run every 30 minutes by default
     ],
     async ({ event, step }) => {
         const batchSize = event?.data?.batchSize || 10;
