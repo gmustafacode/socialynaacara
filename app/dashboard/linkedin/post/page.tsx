@@ -224,6 +224,14 @@ function LinkedInPostContent() {
 
         setLoading(true)
         try {
+            if (formData.scheduledAt) {
+                const scheduledDate = new Date(formData.scheduledAt)
+                const now = new Date()
+                if (scheduledDate <= new Date(now.getTime() + 60000)) {
+                    throw new Error("Scheduled time must be at least 1 minute in the future")
+                }
+            }
+
             const res = await fetch('/api/linkedin/posts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -236,7 +244,7 @@ function LinkedInPostContent() {
             })
 
             if (res.ok) {
-                toast.success(formData.scheduledAt ? "Post scheduled successfully!" : "Post publishing initiated!")
+                toast.success(formData.scheduledAt ? "Post scheduled! (Will be processed in our next 10-min window)" : "Post publishing initiated!")
                 router.push('/dashboard/linkedin/control-panel')
             } else {
                 const error = await res.json()
@@ -534,6 +542,9 @@ function LinkedInPostContent() {
                                                     value={formData.scheduledAt}
                                                     onChange={(e) => setFormData({ ...formData, scheduledAt: e.target.value })}
                                                 />
+                                                <p className="text-[10px] text-white/20 mt-2 italic px-2">
+                                                    Note: Posts are dispatched in 10-minute windows (±5 mins) to optimize delivery.
+                                                </p>
                                             </div>
                                         </div>
 

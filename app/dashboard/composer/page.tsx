@@ -63,6 +63,14 @@ export default function UniversalComposer() {
 
         setLoading(true)
         try {
+            if (formData.scheduledAt) {
+                const scheduledDate = new Date(formData.scheduledAt)
+                const now = new Date()
+                if (scheduledDate <= new Date(now.getTime() + 60000)) {
+                    throw new Error("Scheduled time must be at least 1 minute in the future")
+                }
+            }
+
             const res = await fetch('/api/posts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -74,7 +82,7 @@ export default function UniversalComposer() {
             })
 
             if (res.ok) {
-                toast.success(formData.scheduledAt ? "Post scheduled!" : "Cross-platform transmission active!")
+                toast.success(formData.scheduledAt ? "Post scheduled! (Will be processed in our next 10-min window)" : "Cross-platform transmission active!")
                 router.push('/dashboard/queue')
             } else {
                 const error = await res.json()
@@ -170,6 +178,9 @@ export default function UniversalComposer() {
                                         value={formData.scheduledAt}
                                         onChange={(e) => setFormData({ ...formData, scheduledAt: e.target.value })}
                                     />
+                                    <p className="text-[10px] text-white/20 mt-2 italic px-2">
+                                        Note: Posts are dispatched in 10-minute windows (±5 mins) to optimize delivery.
+                                    </p>
                                 </div>
                             </div>
 
