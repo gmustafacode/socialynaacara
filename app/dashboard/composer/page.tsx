@@ -89,39 +89,69 @@ export default function UniversalComposer() {
         if (!aiParams.topic) return toast.error("Please enter a topic")
 
         setLoading(true)
-        // Simulate "Internet Research Agent" & "AI Generation"
-        // In real backend, this calls `contentEngine` or a specific API route.
         toast.info("Internet Researching Agent is gathering context...")
 
-        setTimeout(() => {
-            const draftedContent = `🚀 **${aiParams.topic}**\n\nAI Generated content tailored for a ${aiParams.tone} tone aiming at ${aiParams.audience || 'general audiences'}.\n\nHere are 3 key takeaways:\n1. Innovation is key\n2. Always adapt to new trends\n3. Engage your audience authentically\n\nWhat are your thoughts? Drop a comment below! 👇\n\n#${aiParams.topic.replace(/\s+/g, '')} #Innovation #FutureTalk`
-            setFormData({ ...formData, contentText: draftedContent })
-            setIsContentSafe(null) // Reset moderation
-            setLoading(false)
-            setStep(3) // Move to Review/Edit
-        }, 2500)
+        try {
+            const res = await fetch('/api/content/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(aiParams)
+            });
+
+            if (!res.ok) throw new Error("Generation Failed");
+
+            const data = await res.json();
+            setFormData({ ...formData, contentText: data.content });
+            setIsContentSafe(null); // Reset moderation
+            setStep(3); // Move to Review/Edit
+            toast.success("AI Generation Complete");
+        } catch (error) {
+            console.error(error);
+            toast.error("Research Agent failed to generate content.");
+        } finally {
+            setLoading(false);
+        }
     }
 
-    const runModerationCheck = () => {
-        // Simulate "Moderation Agent"
+    const runModerationCheck = async () => {
         setLoading(true)
-        setTimeout(() => {
-            const lowercaseContent = formData.contentText.toLowerCase()
-            const spamWords = ['buy now', 'crypto', 'guaranteed', 'click here', 'free money']
-            const foundFlags = spamWords.filter(word => lowercaseContent.includes(word))
+        toast.info("Running Optimization & Safety Scan...");
 
-            if (foundFlags.length > 0) {
-                setIsContentSafe(false)
-                setModerationFlags(foundFlags)
-                toast.error("Content flagged by Moderation Agent")
+        try {
+            const platforms = accounts
+                .filter(a => selectedAccounts.includes(a.id))
+                .map(a => a.platform);
+
+            const res = await fetch('/api/content/moderate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: formData.contentText,
+                    platforms: platforms.length > 0 ? platforms : ['General']
+                })
+            });
+
+            if (!res.ok) throw new Error("Moderation Scan Failed");
+
+            const data = await res.json();
+
+            if (!data.isSafe) {
+                setIsContentSafe(false);
+                setModerationFlags(data.flags);
+                toast.error("Content flagged by Moderation Agent");
             } else {
-                setIsContentSafe(true)
-                setModerationFlags([])
-                toast.success("Content optimization and safety check passed!")
-                setStep(4) // Move to Approval
+                setIsContentSafe(true);
+                setModerationFlags([]);
+                setFormData({ ...formData, contentText: data.optimizedText });
+                toast.success("Content optimization and safety check passed!");
+                setStep(4); // Move to Approval
             }
-            setLoading(false)
-        }, 1000)
+        } catch (error) {
+            console.error(error);
+            toast.error("Optimization Scan failed.");
+        } finally {
+            setLoading(false);
+        }
     }
 
     const handleFinalDispatch = async () => {

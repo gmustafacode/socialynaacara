@@ -367,4 +367,122 @@ export class AIService {
             return false;
         }
     }
+    /**
+     * Generation Engine for the Smart Composer
+     */
+    static async generateContent(userId: string, topic: string, audience: string, tone: string): Promise<string | null> {
+        if (!this.GROQ_API_KEY) return null;
+
+        // Fetch user preferences/learnings to avoid bad output
+        const pastLearnings = await db.aiLearningExample.findMany({
+            where: { userId },
+            orderBy: { createdAt: 'desc' },
+            take: 10
+        });
+
+        let learningContext = "";
+        if (pastLearnings.length > 0) {
+            learningContext = `
+            CRITICAL CONTEXT - PAST PERFORMANCE LEARNINGS:
+            ${pastLearnings.map(l => `- [${l.sentimentScore > 50 ? 'DO THIS' : 'AVOID THIS'}] ${l.keyLearnings}`).join("\n")}
+            Make absolutely sure you apply these learnings to the generated content below.
+            `;
+        }
+
+        const prompt = `
+        You are a world-class social media copywriter and growth expert.
+        Write a highly engaging social media post based on the following parameters:
+        
+        Topic: ${topic}
+        Target Audience: ${audience || 'General public'}
+        Desired Tone: ${tone}
+        
+        ${learningContext}
+
+        Rules:
+        - Generate the POST CONTENT ONLY (ready to publish).
+        - Do not include meta-text like "Here is your post" or "Draft:".
+        - Use appropriate formatting, spacing, and emojis matching the tone.
+        - Include 2-4 appropriate hashtags at the very bottom.
+        `;
+
+        try {
+            const response = await fetch(this.GROQ_API_URL, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${this.GROQ_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: 0.7
+                }),
+                signal: AbortSignal.timeout(30000)
+            });
+
+            if (!response.ok) throw new Error("API Error");
+            const data = await response.json();
+            return data.choices[0].message.content.trim();
+        } catch (e) {
+            console.error("[AI-Service] Content Generation Failed:", e);
+            throw new Error("Failed to generate content.");
+        }
+    }
+
+    /**
+     * Moderation and Optimization Engine
+     */
+    static async moderateAndOptimize(content: string, platforms: string[]): Promise<{ isSafe: boolean, optimizedText: string, flags: string[] }> {
+        if (!this.GROQ_API_KEY) return { isSafe: true, optimizedText: content, flags: [] };
+
+        const prompt = `
+        You are a strict compliance moderator and social media formatter.
+        Analyze the following content intended for publishing on: ${platforms.join(", ")}.
+
+        CONTENT:
+        "${content}"
+
+        TASK 1 (MODERATION):
+        - Check for spam, NSFW, hate speech, excessive promotional scammy text (e.g. "free money", "guaranteed crypto", "buy now").
+        
+        TASK 2 (OPTIMIZATION):
+        - If safe, slightly adjust formatting (spacing/length) to ensure it fits the limits of the target platforms. Do not change the core message.
+        
+        RETURN A JSON OBJECT WITH:
+        - "isSafe" (boolean)
+        - "flags" (array of strings): specific policy violations or scam keywords found. Empty if safe.
+        - "optimizedText" (string): The cleanly formatted text ready for publishing (if safe). Or empty if unsafe.
+        `;
+
+        try {
+            const response = await fetch(this.GROQ_API_URL, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${this.GROQ_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: 0.1,
+                    response_format: { type: "json_object" }
+                }),
+                signal: AbortSignal.timeout(30000)
+            });
+
+            if (!response.ok) throw new Error("API Error");
+            const data = await response.json();
+            const parsed = JSON.parse(data.choices[0].message.content);
+
+            return {
+                isSafe: parsed.isSafe,
+                flags: parsed.flags || [],
+                optimizedText: parsed.optimizedText || content
+            };
+        } catch (e) {
+            console.error("[AI-Service] Moderation Failed:", e);
+            throw new Error("Failed to run moderation check.");
+        }
+    }
 }
