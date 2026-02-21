@@ -188,60 +188,47 @@ export async function refreshAccessToken(accountId: string) {
             return null;
         }
 
-        const response = await fetch(tokenUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                client_id: clientId,
-                client_secret: clientSecret,
-                refresh_token: refreshToken,
-                grant_type: 'refresh_token',
-            }),
-            signal: AbortSignal.timeout(20000) // 20s timeout
-        });
+        let tokenResponse;
+        try {
+            tokenResponse = await fetch(tokenUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    refresh_token: refreshToken,
+                    grant_type: 'refresh_token',
+                }),
+                signal: AbortSignal.timeout(20000) // 20s timeout
+            });
+        } catch (fetchError: any) {
+            console.error(`[OAuth Refresh] Fetch error for account ${accountId}:`, fetchError.message);
+            return null; // Don't revoke on temporary network issues
+        }
 
         let data: any;
         try {
-            data = await response.json();
+            const text = await tokenResponse.text();
+            data = text ? JSON.parse(text) : {};
         } catch (e) {
-            const text = await response.text().catch(() => "Unreadable response");
-            data = { error: "non_json_error", message: text.substring(0, 200) };
+            data = { error: "parse_error", message: "Invalid JSON response" };
         }
 
-        if (!response.ok) {
+        if (!tokenResponse.ok) {
             console.error(`[OAuth Refresh] API Failed for account ${accountId} (${account.platform}):`, {
-                status: response.status,
+                status: tokenResponse.status,
                 error: data
             });
 
             // Handle specific rotation or invalid_grant errors
-            const isRevoked = data.error === 'invalid_grant' || response.status === 401 || response.status === 400;
-
-            if (isRevoked) {
-                let metadataObj = {};
-                try {
-                    metadataObj = JSON.parse(account.metadata || '{}');
-                } catch (e) { }
-
+            if (data.error === 'invalid_grant' || tokenResponse.status === 401 || tokenResponse.status === 400) {
                 await db.socialAccount.update({
                     where: { id: accountId },
                     data: {
                         status: 'revoked',
-                        metadata: JSON.stringify({
-                            ...metadataObj,
-                            lastRefreshError: data
-                        })
+                        metadata: JSON.stringify({ lastRefreshError: data })
                     }
                 });
-
-                const user = await db.user.findUnique({ where: { id: account.userId } });
-                if (user?.email) {
-                    await sendMail({
-                        to: user.email,
-                        subject: `Action Required: Reconnect your ${account.platform} account`,
-                        text: `Your connection to ${account.platform} has been revoked because the refresh token is no longer valid. Please reconnect it in your dashboard.\n\nDetails: ${data.error_description || data.error || 'Invalid Grant'}`
-                    });
-                }
             }
             return null;
         }
@@ -257,7 +244,8 @@ export async function refreshAccessToken(accountId: string) {
             }
         });
 
-        return decrypt(updatedAccount.encryptedAccessToken || '');
+        // Add null check since encryptedAccessToken can be null
+        return updatedAccount.encryptedAccessToken ? decrypt(updatedAccount.encryptedAccessToken) : null;
 
     } catch (error) {
         console.error("Token refresh failed:", error);

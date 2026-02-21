@@ -174,13 +174,10 @@ export const cronScheduler = inngest.createFunction(
 
         if (duePosts.length === 0) return { message: "No posts due." };
 
-        let publishedCount = 0;
-        let failedCount = 0;
-
-        // 3. Process Each Post
-        const results = [];
-        for (const post of duePosts) {
-            const res = await step.run(`process-${post.id}`, async () => {
+        // 3. Process Each Post in a single robust step to avoid Vercel timeout limits
+        const processResults = await step.run("dispatch-all-posts", async () => {
+            const results = [];
+            for (const post of duePosts) {
                 try {
                     // 3.1 Rate Limit Check
                     const limitCheck = await checkPostingLimits(post.userId, post.platform);
@@ -193,7 +190,8 @@ export const cronScheduler = inngest.createFunction(
                                 lastError: `Rate Limit: ${limitCheck.error}`
                             }
                         });
-                        return { id: post.id, status: "rate_limited" };
+                        results.push({ id: post.id, status: "rate_limited" });
+                        continue;
                     }
 
                     // 3.2 Mark Processing
@@ -208,8 +206,9 @@ export const cronScheduler = inngest.createFunction(
                             name: "linkedin/post.publish",
                             data: { postId: post.contentId, scheduledPostId: post.id }
                         });
-                        publishedCount++;
-                        return { id: post.id, status: "dispatched_to_inngest" };
+                        // Don't update publishedCount/failedCount here, we will aggregate after
+                        results.push({ id: post.id, status: "dispatched_to_inngest" });
+                        continue;
                     }
 
                     if (post.platform === 'rss' || post.platform === 'manual') {
@@ -236,23 +235,25 @@ export const cronScheduler = inngest.createFunction(
                             where: { id: post.id },
                             data: { status: 'published', publishedAt: new Date() }
                         });
-                        publishedCount++;
-                        return { id: post.id, status: "published_via_webhook" };
+                        results.push({ id: post.id, status: "published_via_webhook" });
+                        continue;
                     }
 
-                    return { id: post.id, status: "unsupported_platform" };
+                    results.push({ id: post.id, status: "unsupported_platform" });
 
                 } catch (err: any) {
-                    failedCount++;
                     await db.scheduledPost.update({
                         where: { id: post.id },
                         data: { status: 'failed', lastError: err.message, updatedAt: new Date() }
                     });
-                    return { id: post.id, status: "failed", error: err.message };
+                    results.push({ id: post.id, status: "failed", error: err.message });
                 }
-            });
-            results.push(res);
-        }
+            }
+            return results;
+        });
+
+        const publishedCount = processResults.filter((r: any) => r.status === "dispatched_to_inngest" || r.status === "published_via_webhook").length;
+        const failedCount = processResults.filter((r: any) => r.status === "failed").length;
 
         // 4. Final Logging
         await step.run("log-execution", async () => {
@@ -270,7 +271,7 @@ export const cronScheduler = inngest.createFunction(
             }).catch(() => { });
         });
 
-        return { processed: duePosts.length, results };
+        return { processed: duePosts.length, results: processResults };
     }
 );
 

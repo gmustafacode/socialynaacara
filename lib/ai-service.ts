@@ -181,7 +181,8 @@ export class AIService {
                     messages: [{ role: "user", content: prompt }],
                     temperature: 0.2,
                     response_format: { type: "json_object" }
-                })
+                }),
+                signal: AbortSignal.timeout(45000)
             });
 
             if (!response.ok) {
@@ -333,7 +334,8 @@ export class AIService {
                     messages: [{ role: "user", content: prompt }],
                     temperature: 0.1,
                     response_format: { type: "json_object" }
-                })
+                }),
+                signal: AbortSignal.timeout(45000)
             });
 
             if (!response.ok) {
