@@ -22,9 +22,11 @@ async function fix() {
             'ALTER TABLE "content_queue" ADD COLUMN IF NOT EXISTS "final_score" DOUBLE PRECISION;',
             'ALTER TABLE "content_queue" ADD COLUMN IF NOT EXISTS "decision_reason" TEXT;',
             'ALTER TABLE "content_queue" ADD COLUMN IF NOT EXISTS "analyzed_at" TIMESTAMP(3);',
+            'CREATE TABLE IF NOT EXISTS "ai_learning_examples" (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, post_id TEXT NOT NULL, content_text TEXT NOT NULL, sentiment_score INTEGER NOT NULL, category TEXT NOT NULL, key_learnings TEXT NOT NULL, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);',
             'GRANT ALL ON TABLE "content_ai_analysis" TO anon, authenticated;',
             'GRANT ALL ON TABLE "ai_processing_logs" TO anon, authenticated;',
-            'GRANT ALL ON TABLE "content_queue" TO anon, authenticated;'
+            'GRANT ALL ON TABLE "content_queue" TO anon, authenticated;',
+            'GRANT ALL ON TABLE "ai_learning_examples" TO anon, authenticated;'
         ];
 
         for (const q of queries) {

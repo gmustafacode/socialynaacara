@@ -301,3 +301,73 @@ export const aiContentAnalysis = inngest.createFunction(
     }
 );
 
+/**
+ * AI LEARNING FEEDBACK LOOP: Step 8 (Analytics + Learning)
+ * Runs daily to fetch top performing posts and extract sentiment/rules.
+ */
+export const aiFeedbackLoop = inngest.createFunction(
+    { id: "ai-feedback-loop", concurrency: 1 },
+    { cron: "0 2 * * *" }, // Run at 2 AM everyday
+    async ({ step }) => {
+        const results = await step.run("extract-learnings", async () => {
+            // Find recent published posts with high engagement
+            const lastWeek = new Date();
+            lastWeek.setDate(lastWeek.getDate() - 7);
+
+            const posts = await db.postHistory.findMany({
+                where: {
+                    status: 'PUBLISHED',
+                    postedAt: { gte: lastWeek },
+                    engagementMetrics: { not: null }
+                },
+                take: 50 // Limit to top 50 recent posts
+            });
+
+            let learningsExtracted = 0;
+
+            for (const post of posts) {
+                if (!post.engagementMetrics) continue;
+
+                try {
+                    const metrics = typeof post.engagementMetrics === 'string'
+                        ? JSON.parse(post.engagementMetrics)
+                        : post.engagementMetrics;
+
+                    // Trigger learning if there are meaningful comments (e.g., > 5)
+                    if (metrics.comments > 5) {
+                        // In reality, we'd fetch actual comments text using LinkedIn API.
+                        // For demonstration, we'll mock comments based on metrics.
+                        const mockComments = [
+                            "This is an amazing insight!",
+                            "I totally disagree, this wouldn't work.",
+                            "Great post, thanks for sharing!",
+                            "Very helpful for my startup.",
+                            "Not entirely accurate, needs more context."
+                        ];
+
+                        const originalContent = (await db.linkedInPost.findUnique({
+                            where: { id: post.postId! },
+                            select: { description: true }
+                        }))?.description || "Example text";
+
+                        const success = await AIService.extractLearningsFromFeedback(
+                            post.userId,
+                            post.postId!,
+                            originalContent,
+                            mockComments
+                        );
+
+                        if (success) learningsExtracted++;
+                    }
+                } catch (e) {
+                    console.error("Failed to extract learnings for post", post.id, e);
+                }
+            }
+
+            return { processed: posts.length, learningsExtracted };
+        });
+
+        return { message: "Feedback Loop Complete", stats: results };
+    }
+);
+

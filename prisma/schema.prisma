@@ -304,3 +304,18 @@ model AiProcessingLog {
 
   @@map("ai_processing_logs")
 }
+
+model AiLearningExample {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  postId          String   @map("post_id")
+  contentText     String   @map("content_text")
+  sentimentScore  Int      @map("sentiment_score")
+  category        String
+  keyLearnings    String   @map("key_learnings")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([category])
+  @@map("ai_learning_examples")
+}

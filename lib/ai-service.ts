@@ -64,8 +64,8 @@ export class AIService {
                         continue;
                     }
 
-                    // 3. AI Analysis
-                    const analysis = await this.analyzeWithAI(cleanedContent);
+                    // 3. AI Analysis (with dynamic feedback loop learning)
+                    const analysis = await this.analyzeWithAI(cleanedContent, item.userId);
                     if (!analysis) {
                         stats.ai_errors++;
                         continue;
@@ -131,14 +131,30 @@ export class AIService {
             .trim();
     }
 
-    private static async analyzeWithAI(content: string): Promise<AIAnalysisResult | null> {
+    private static async analyzeWithAI(content: string, userId: string | null = null): Promise<AIAnalysisResult | null> {
         if (!this.GROQ_API_KEY) {
             throw new Error("GROQ_API_KEY is missing in environment variables");
         }
 
+        // Fetch dynamic learning feedback from previous posts
+        let memoryRules = "";
+        if (userId) {
+            const pastLearnings = await db.aiLearningExample.findMany({
+                where: { userId },
+                orderBy: { createdAt: 'desc' },
+                take: 5 // Get top 5 recent learnings
+            });
+
+            if (pastLearnings.length > 0) {
+                memoryRules = `\n\nCRITICAL AI MEMORY RULES (Based on past real-world performance for this user):\n` +
+                    pastLearnings.map(l => `- [${l.category.toUpperCase()}] ${l.keyLearnings}`).join("\n") +
+                    `\nApply these learnings strictly when deciding formatting, quality score, and rewrite necessity.`;
+            }
+        }
+
         const prompt = `
         Analyze the following content for strategic value.
-        Content: ${content.substring(0, 4000)}
+        Content: ${content.substring(0, 4000)}${memoryRules}
 
         Return a JSON object with:
         - category: one of [technology, startup, ai, business, marketing, other]
@@ -276,5 +292,77 @@ export class AIService {
                 rawLlmResponse: analysis as any
             }
         });
+    }
+
+    /**
+     * AI Feedback Loop: Analyzes post comments/engagement to extract sentiment and learning guidelines
+     * for future content generation and evaluation.
+     */
+    static async extractLearningsFromFeedback(userId: string, postId: string, contentText: string, comments: string[]): Promise<boolean> {
+        if (!this.GROQ_API_KEY || comments.length === 0) return false;
+
+        const prompt = `
+        You are a sophisticated social media AI intelligence learning system. 
+        We posted the following content and received comments from real users.
+        Analyze the overall sentiment of the comments. Did people like it (constructive, positive, engaging) or hate it (trolling, toxic, disagreement)?
+        
+        Original Post Content:
+        "${contentText}"
+
+        Real User Comments:
+        ${comments.map(c => "- " + c).join("\n")}
+
+        Identify what made this post succeed or fail.
+        Return a JSON object with:
+        - sentiment_score: 0 (extreme negative/hate) to 100 (extreme positive/love)
+        - category: "positive" or "negative"
+        - key_learnings: A short, 1-2 sentence concise instruction/rule on what to do (or avoid doing) in the future based on this post's specific performance.
+
+        IMPORTANT: Response MUST be a valid JSON object only. No intro or outro text.
+        `;
+
+        try {
+            const response = await fetch(this.GROQ_API_URL, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${this.GROQ_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: 0.1,
+                    response_format: { type: "json_object" }
+                })
+            });
+
+            if (!response.ok) {
+                console.error("[AI-Service] Learning extraction API error:", response.statusText);
+                return false;
+            }
+
+            const data = await response.json();
+            const resultText = data.choices[0].message.content;
+            const parsed = JSON.parse(resultText);
+
+            // Save the extracted intelligence to the database
+            await db.aiLearningExample.create({
+                data: {
+                    userId,
+                    postId,
+                    contentText,
+                    sentimentScore: parsed.sentiment_score,
+                    category: parsed.category === 'positive' || parsed.category === 'negative' ? parsed.category : 'neutral',
+                    keyLearnings: parsed.key_learnings
+                }
+            });
+
+            console.log(`[AI-Learning] Logic updated for post ${postId} (${parsed.category} sentiment)`);
+            return true;
+
+        } catch (error) {
+            console.error("[AI-Service] Sentiment extraction failed:", error);
+            return false;
+        }
     }
 }
