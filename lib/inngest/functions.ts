@@ -1,128 +1,177 @@
 import { inngest } from "./client";
 import db from "../db";
-import { LinkedInAuthService } from "../linkedin-auth-service";
 import { LinkedInPostingService } from "../linkedin-posting-service";
 import { checkPostingLimits } from "../limits";
 import { getValidAccessToken } from "../oauth";
 import { getBaseUrl } from "../utils";
 import { AIService } from "../ai-service";
+import { fetchRSS } from "../ingestion/connectors/rss";
+import { fetchReddit } from "../ingestion/connectors/reddit";
+import { fetchNewsAPI } from "../ingestion/connectors/news";
+import { fetchUnsplash } from "../ingestion/connectors/unsplash";
+import { fetchPexels } from "../ingestion/connectors/pexels";
+import { processIngestedContent } from "../ingestion/processor";
+import { NormalizedContent } from "../ingestion/types";
 
 /**
- * Execution Engine: Publishes LinkedIn Article Posts (Feed + Groups)
+ * =========================================================================
+ * 🔴 FUNCTION 1 — MASTER ORCHESTRATOR
+ * ============================================================================
+ * Purpose: Central brain. Manages events, workflow chaining, failures.
+ * Routes tasks to appropriate engines.
  */
-export const publishLinkedInPost = inngest.createFunction(
-    {
-        id: "publish-linkedin-post",
-        retries: 3,
-        onFailure: async ({ event, error, step }) => {
-            const { postId, scheduledPostId } = event.data as any;
-            console.error(`[Inngest] Critical failure for post ${postId || 'UNKNOWN'} after retries:`, error);
-
-            if (postId) {
-                await db.linkedInPost.update({
-                    where: { id: postId },
-                    data: {
-                        status: 'FAILED',
-                        errorMessage: error.message || "Unknown error (Retries exhausted)"
-                    }
-                }).catch(() => { });
-            }
-
-            if (scheduledPostId) {
-                await db.scheduledPost.update({
-                    where: { id: scheduledPostId },
-                    data: {
-                        status: 'failed',
-                        lastError: error.message || "Unknown error (Retries exhausted)"
-                    }
-                }).catch(() => { });
-            }
-        }
-    },
-    { event: "linkedin/post.publish" },
+export const masterOrchestrator = inngest.createFunction(
+    { id: "master-orchestrator", concurrency: 10 },
+    [
+        { event: "app/orchestrator.route" }
+    ],
     async ({ event, step }) => {
-        const { postId, scheduledPostId } = event.data;
+        const { action, payload } = event.data;
 
-        if (!postId) {
-            console.error("[Inngest] Missing postId in event data", event.data);
-            return { error: "Missing postId" };
-        }
-
-        const post = await step.run("mark-processing", async () => {
-            const result = await db.linkedInPost.updateMany({
-                where: {
-                    id: postId,
-                    status: { in: ['SCHEDULED', 'PENDING', 'DRAFT'] },
-                    linkedinPostUrn: null
-                },
-                data: { status: 'PROCESSING' }
-            });
-
-            if (result.count === 0) return null;
-
-            return await db.linkedInPost.findUnique({
-                where: { id: postId },
-                include: { socialAccount: true }
-            });
+        await step.run(`routing-${action}`, async () => {
+            console.log(`[Orchestrator] Routing action: ${action}`);
         });
 
-        if (!post) {
-            console.warn(`[Inngest] Skipping post ${postId} (Already processing or missing)`);
-            return { skipped: true };
+        switch (action) {
+            case "CREATE_CONTENT":
+                await inngest.send({ name: "app/content.generate", data: payload });
+                break;
+            case "PUBLISH_NOW":
+                await inngest.send({ name: "linkedin/post.publish", data: payload });
+                break;
+            case "SCHEDULE_POST":
+                // Scheduled via DB, trigger any real-time processing needed here
+                break;
+            case "ANALYZE_POSTS":
+                await inngest.send({ name: "app/analytics.analyze", data: payload });
+                break;
         }
 
-        const result = await step.run("publish-via-service", async () => {
-            return await LinkedInPostingService.publishPost(postId);
-        });
-
-        if (scheduledPostId) {
-            await step.run("sync-scheduled-post", async () => {
-                const r = result as any;
-                const externalId = r.results?.[0] || null;
-                await db.scheduledPost.update({
-                    where: { id: scheduledPostId },
-                    data: {
-                        status: 'published',
-                        publishedAt: new Date(),
-                        externalPostId: externalId
-                    }
-                });
-            });
-        }
-
-        return { success: true, ...result };
+        return { routed: action, success: true };
     }
 );
 
+/**
+ * =========================================================================
+ * 🟢 FUNCTION 2 — CONTENT ENGINE
+ * ============================================================================
+ * Purpose: Full content factory (Research + AI Generation + Formatting).
+ */
+export const contentEngine = inngest.createFunction(
+    { id: "content-engine", concurrency: 2 },
+    [
+        { cron: process.env.INGESTION_CRON || "0 */4 * * *" }, // Research & Collection Phase
+        { event: "app/content.generate" }, // Manual Generation Phase
+        { cron: "*/30 * * * *" }, // Automatic AI Generation Phase
+        { event: "ai/content.analyze" } // Legacy backward compatibility
+    ],
+    async ({ event, step }) => {
+        const isIngestionEvent = !event.name && (event as any).cron === (process.env.INGESTION_CRON || "0 */4 * * *");
+        const isGenerationEvent = event.name === "app/content.generate" || event.name === "ai/content.analyze" || (!event.name && (event as any).cron === "*/30 * * * *");
 
+        let researchStats: any = null;
+        let aiStats: any = null;
 
+        // --- Data Collection & Trend Research ---
+        if (isIngestionEvent) {
+            const sources = ['rss', 'reddit', 'news_api', 'unsplash', 'pexels'];
+            const category = 'technology';
+            const query = 'technology';
+
+            const results = [];
+            for (const source of sources) {
+                const items = await step.run(`fetch-${source}`, async () => {
+                    let fetched: NormalizedContent[] = [];
+                    switch (source) {
+                        case 'rss': fetched = await fetchRSS('https://feeds.feedburner.com/TechCrunch/'); break;
+                        case 'reddit': fetched = await fetchReddit(category); break;
+                        case 'news_api': fetched = await fetchNewsAPI(category); break;
+                        case 'unsplash': fetched = await fetchUnsplash(query); break;
+                        case 'pexels': fetched = await fetchPexels(query); break;
+                    }
+                    return fetched;
+                });
+
+                if (items.length > 0) {
+                    const itemsWithDates = items.map((item: any) => ({
+                        ...item,
+                        publishedAt: item.publishedAt ? new Date(item.publishedAt) : undefined
+                    }));
+
+                    const result = await step.run(`process-${source}`, async () => {
+                        return await processIngestedContent(source as any, itemsWithDates);
+                    });
+                    results.push(result);
+                }
+            }
+            researchStats = { processedSources: results.length, details: results };
+        }
+
+        // --- AI Content Generation & Validation ---
+        if (isGenerationEvent) {
+            const batchSize = event.data?.batchSize || 10;
+            aiStats = await step.run("generate-ai-content", async () => {
+                return await AIService.processBatch(batchSize);
+            });
+        }
+
+        return { success: true, researchStats, aiStats };
+    }
+);
 
 /**
- * CRON SCHEDULER: Replaces automation-worker.ts for production (Vercel)
- * Runs every minute to find due posts and dispatch them.
+ * =========================================================================
+ * 🔵 FUNCTION 3 — SCHEDULER + PUBLISHER
+ * ============================================================================
+ * Purpose: Queue management, time-zone handling, and auto-publishing to ALL platforms.
  */
-export const cronScheduler = inngest.createFunction(
-    { id: "cron-scheduler", concurrency: 1 },
-    { cron: "*/1 * * * *" },
-    async ({ step }) => {
-        const startedAt = new Date();
+export const schedulerPublisher = inngest.createFunction(
+    { id: "scheduler-publisher", concurrency: 5 },
+    [
+        { cron: "*/1 * * * *" }, // Scheduler Engine Tick
+        { event: "linkedin/post.publish" }, // Immediate Publisher (Legacy Support)
+        { event: "app/post.publish_now" } // Immediate Publisher (Universal Support)
+    ],
+    async ({ event, step }) => {
+        const isImmediate = !!event.name;
 
-        // 1. Recover Stale Jobs
-        await step.run("recover-stale-jobs", async () => {
-            const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-            await db.scheduledPost.updateMany({
-                where: {
-                    status: 'processing',
-                    updatedAt: { lte: thirtyMinutesAgo }
-                },
-                data: {
-                    status: 'pending',
-                    lastError: 'Stale post recovery: Reset after processing timeout.'
-                }
+        // --- IMMEDIATE PUBLISHER ---
+        if (isImmediate) {
+            const { postId, scheduledPostId } = event.data;
+            if (!postId) return { error: "Missing postId" };
+
+            const post = await step.run("mark-processing", async () => {
+                const result = await db.linkedInPost.updateMany({
+                    where: { id: postId, status: { in: ['SCHEDULED', 'PENDING', 'DRAFT'] }, linkedinPostUrn: null },
+                    data: { status: 'PROCESSING' }
+                });
+                if (result.count === 0) return null;
+                return await db.linkedInPost.findUnique({ where: { id: postId }, include: { socialAccount: true } });
             });
-        });
 
-        // 2. Fetch Due Posts
+            if (!post) {
+                console.warn(`[Inngest] Skipping post ${postId} (Already processing or missing)`);
+                return { skipped: true };
+            }
+
+            const result = await step.run("publish-via-service", async () => {
+                return await LinkedInPostingService.publishPost(postId);
+            });
+
+            if (scheduledPostId) {
+                await step.run("sync-scheduled-post", async () => {
+                    const r = result as any;
+                    const externalId = r.results?.[0] || null;
+                    await db.scheduledPost.update({
+                        where: { id: scheduledPostId },
+                        data: { status: 'published', publishedAt: new Date(), externalPostId: externalId }
+                    });
+                });
+            }
+            return { success: true, ...result };
+        }
+
+        // --- SCHEDULER ENGINE (Cron Tick) ---
         const duePosts = await step.run("fetch-due-posts", async () => {
             const posts: any[] = await db.$queryRaw`
                 SELECT id, "userId", platform, "content_id" as "contentId", "socialAccountId", "postType", "contentText" 
@@ -133,8 +182,6 @@ export const cronScheduler = inngest.createFunction(
                 LIMIT 100
                 FOR UPDATE SKIP LOCKED;
             `;
-
-            // Explicitly map lowercase fields if Postgres returned them as such
             return posts.map(p => ({
                 ...p,
                 contentId: p.contentId || p.contentid,
@@ -143,50 +190,34 @@ export const cronScheduler = inngest.createFunction(
             }));
         });
 
-
         if (duePosts.length === 0) return { message: "No posts due." };
 
-        // 3. Process Each Post in a single robust step to avoid Vercel timeout limits
         const processResults = await step.run("dispatch-all-posts", async () => {
             const results = [];
             for (const post of duePosts) {
                 try {
-                    // 3.1 Rate Limit Check
                     const limitCheck = await checkPostingLimits(post.userId, post.platform);
                     if (!limitCheck.allowed) {
                         await db.scheduledPost.update({
                             where: { id: post.id },
-                            data: {
-                                status: 'pending',
-                                scheduledAt: new Date(Date.now() + 5 * 60 * 1000), // Push back
-                                lastError: `Rate Limit: ${limitCheck.error}`
-                            }
+                            data: { status: 'pending', scheduledAt: new Date(Date.now() + 5 * 60 * 1000), lastError: `Rate Limit: ${limitCheck.error}` }
                         });
                         results.push({ id: post.id, status: "rate_limited" });
                         continue;
                     }
 
-                    // 3.2 Mark Processing
-                    await db.scheduledPost.update({
-                        where: { id: post.id },
-                        data: { status: 'processing', updatedAt: new Date() }
-                    });
+                    await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'processing', updatedAt: new Date() } });
 
-                    // 3.3 Dispatch Logic
                     if (post.platform === 'linkedin') {
-                        await inngest.send({
-                            name: "linkedin/post.publish",
-                            data: { postId: post.contentId, scheduledPostId: post.id }
-                        });
-                        // Don't update publishedCount/failedCount here, we will aggregate after
-                        results.push({ id: post.id, status: "dispatched_to_inngest" });
+                        await inngest.send({ name: "linkedin/post.publish", data: { postId: post.contentId, scheduledPostId: post.id } });
+                        results.push({ id: post.id, status: "dispatched_to_native_inngest" });
                         continue;
                     }
 
-                    if (post.platform === 'rss' || post.platform === 'manual') {
+                    if (post.platform !== 'linkedin') {
                         const accessToken = await getValidAccessToken(post.socialAccountId);
                         const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
-                        if (!webhookUrl) throw new Error("N8N Webhook Missing");
+                        if (!webhookUrl) throw new Error("Universal Publisher Webhook Missing");
 
                         const resp = await fetch(webhookUrl, {
                             method: 'POST',
@@ -203,41 +234,31 @@ export const cronScheduler = inngest.createFunction(
 
                         if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
 
-                        await db.scheduledPost.update({
-                            where: { id: post.id },
-                            data: { status: 'published', publishedAt: new Date() }
-                        });
+                        await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'published', publishedAt: new Date() } });
                         results.push({ id: post.id, status: "published_via_webhook" });
                         continue;
                     }
-
-                    results.push({ id: post.id, status: "unsupported_platform" });
-
                 } catch (err: any) {
-                    await db.scheduledPost.update({
-                        where: { id: post.id },
-                        data: { status: 'failed', lastError: err.message, updatedAt: new Date() }
-                    });
+                    await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'failed', lastError: err.message, updatedAt: new Date() } });
                     results.push({ id: post.id, status: "failed", error: err.message });
                 }
             }
             return results;
         });
 
-        const publishedCount = processResults.filter((r: any) => r.status === "dispatched_to_inngest" || r.status === "published_via_webhook").length;
+        const publishedCount = processResults.filter((r: any) => r.status === "dispatched_to_native_inngest" || r.status === "published_via_webhook").length;
         const failedCount = processResults.filter((r: any) => r.status === "failed").length;
 
-        // 4. Final Logging
         await step.run("log-execution", async () => {
             const finishedAt = new Date();
             await db.cronExecutionLog.create({
                 data: {
-                    startedAt,
+                    startedAt: new Date(),
                     finishedAt,
                     processed: duePosts.length,
                     published: publishedCount,
                     failed: failedCount,
-                    executionTimeMs: finishedAt.getTime() - startedAt.getTime(),
+                    executionTimeMs: finishedAt.getTime() - new Date().getTime(),
                     errorsCount: failedCount
                 }
             }).catch(() => { });
@@ -248,68 +269,34 @@ export const cronScheduler = inngest.createFunction(
 );
 
 /**
- * AI CONTENT ANALYSIS: Scales Step 4 (Decision Layer)
- * Automatically processes pending items from the content queue.
+ * =========================================================================
+ * 🟣 FUNCTION 4 — ANALYTICS ENGINE
+ * ============================================================================
+ * Purpose: Performance intelligence, AI sentiment analysis (Positive/Negative impact).
  */
-export const aiContentAnalysis = inngest.createFunction(
-    {
-        id: "ai-content-analysis",
-        concurrency: 2 // Allow 2 batches in parallel
-    },
+export const analyticsEngine = inngest.createFunction(
+    { id: "analytics-engine", concurrency: 1 },
     [
-        { event: "ai/content.analyze" },
-        { cron: "*/30 * * * *" } // Run every 30 minutes by default
+        { cron: "0 2 * * *" }, // Runs daily at 2AM
+        { event: "app/analytics.analyze" }
     ],
-    async ({ event, step }) => {
-        const batchSize = event?.data?.batchSize || 10;
-
-        const results = await step.run("process-ai-batch", async () => {
-            return await AIService.processBatch(batchSize);
-        });
-
-        return {
-            message: "AI Analysis Complete",
-            stats: results
-        };
-    }
-);
-
-/**
- * AI LEARNING FEEDBACK LOOP: Step 8 (Analytics + Learning)
- * Runs daily to fetch top performing posts and extract sentiment/rules.
- */
-export const aiFeedbackLoop = inngest.createFunction(
-    { id: "ai-feedback-loop", concurrency: 1 },
-    { cron: "0 2 * * *" }, // Run at 2 AM everyday
     async ({ step }) => {
         const results = await step.run("extract-learnings", async () => {
-            // Find recent published posts with high engagement
             const lastWeek = new Date();
             lastWeek.setDate(lastWeek.getDate() - 7);
 
             const posts = await db.postHistory.findMany({
-                where: {
-                    status: 'PUBLISHED',
-                    postedAt: { gte: lastWeek },
-                    engagementMetrics: { not: null }
-                },
-                take: 50 // Limit to top 50 recent posts
+                where: { status: 'PUBLISHED', postedAt: { gte: lastWeek }, engagementMetrics: { not: null } },
+                take: 50
             });
 
             let learningsExtracted = 0;
 
             for (const post of posts) {
                 if (!post.engagementMetrics) continue;
-
                 try {
-                    const metrics = typeof post.engagementMetrics === 'string'
-                        ? JSON.parse(post.engagementMetrics)
-                        : post.engagementMetrics;
-
-                    // Trigger learning if there are meaningful comments (e.g., > 5)
+                    const metrics = typeof post.engagementMetrics === 'string' ? JSON.parse(post.engagementMetrics) : post.engagementMetrics;
                     if (metrics.comments > 5) {
-                        // In reality, we'd fetch actual comments text using LinkedIn API.
-                        // For demonstration, we'll mock comments based on metrics.
                         const mockComments = [
                             "This is an amazing insight!",
                             "I totally disagree, this wouldn't work.",
@@ -324,10 +311,7 @@ export const aiFeedbackLoop = inngest.createFunction(
                         }))?.description || "Example text";
 
                         const success = await AIService.extractLearningsFromFeedback(
-                            post.userId,
-                            post.postId!,
-                            originalContent,
-                            mockComments
+                            post.userId, post.postId!, originalContent, mockComments
                         );
 
                         if (success) learningsExtracted++;
@@ -344,3 +328,27 @@ export const aiFeedbackLoop = inngest.createFunction(
     }
 );
 
+/**
+ * =========================================================================
+ * 🟡 FUNCTION 5 — SYSTEM UTILITIES
+ * ============================================================================
+ * Purpose: Failure handling, cleanup, consistency checks, health monitoring.
+ */
+export const systemUtilities = inngest.createFunction(
+    { id: "system-utilities", concurrency: 1 },
+    [
+        { cron: "0 * * * *" } // Hourly cleanup
+    ],
+    async ({ step }) => {
+        // Recover stale jobs
+        await step.run("recover-stale-jobs", async () => {
+            const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+            await db.scheduledPost.updateMany({
+                where: { status: 'processing', updatedAt: { lte: thirtyMinutesAgo } },
+                data: { status: 'pending', lastError: 'Stale post recovery: Reset after processing timeout.' }
+            });
+        });
+
+        return { success: true, message: "System cleanup complete" };
+    }
+);
