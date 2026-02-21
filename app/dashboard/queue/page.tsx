@@ -50,17 +50,33 @@ export default function QueuePage() {
             const genericRes = await fetch('/api/posts')
             const genericData = genericRes.ok ? await genericRes.json() : []
 
-            // 4. Unify and Sort
-            const combinedHistory = [
-                ...historyData.map((p: any) => ({ ...p, _type: 'linkedin' })),
-                ...genericData.map((p: any) => ({
+            // 4. Unify and Filter Duplicates
+            // We use 'linkedInPost' as the primary for LinkedIn, and 'scheduledPost' for others.
+            // If a 'scheduledPost' has a 'contentId', it means it's a pointer to a 'linkedInPost'
+            // and we should skip it to avoid duplicates.
+            const historyMap = new Map();
+
+            // First pass: add all LinkedIn posts
+            historyData.forEach((p: any) => {
+                historyMap.set(p.id, { ...p, _type: 'linkedin' });
+            });
+
+            // Second pass: add generic posts only if they aren't pointers to existing LinkedIn posts
+            genericData.forEach((p: any) => {
+                if (p.contentId && historyMap.has(p.contentId)) {
+                    // Skip duplicate
+                    return;
+                }
+                historyMap.set(p.id, {
                     ...p,
                     _type: 'generic',
-                    // Map generic fields to common display fields if needed
                     description: p.contentText,
                     postType: p.postType
-                }))
-            ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                });
+            });
+
+            const combinedHistory = Array.from(historyMap.values())
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
             setHistory(combinedHistory)
         } catch (error) {

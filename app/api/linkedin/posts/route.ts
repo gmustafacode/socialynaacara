@@ -150,6 +150,9 @@ export async function POST(request: Request) {
         }
 
         // 5. Create LinkedInPost record in DB (Content Data Layer)
+        const isScheduled = !!scheduledAt;
+        const scheduleTime = isScheduled ? new Date(scheduledAt) : new Date();
+
         const post = await db.linkedInPost.create({
             data: {
                 userId,
@@ -163,15 +166,13 @@ export async function POST(request: Request) {
                 targetType: targetType || "FEED",
                 groupIds: sanitizedGroupIds,
                 visibility: visibility || "PUBLIC",
-                status: "PENDING", // Ready for the backend cron
-                scheduledAt: scheduledAt ? new Date(scheduledAt) : new Date(),
+                status: isScheduled ? "SCHEDULED" : "PENDING",
+                scheduledAt: scheduleTime,
             }
         });
 
         // 6. Create ScheduledPost record (The Scheduling Controller)
-        const scheduleTime = scheduledAt ? new Date(scheduledAt) : new Date();
-
-        await db.scheduledPost.create({
+        const scheduledPost = await db.scheduledPost.create({
             data: {
                 userId,
                 socialAccountId,
@@ -183,16 +184,30 @@ export async function POST(request: Request) {
                 targetId: (sanitizedGroupIds && sanitizedGroupIds.length > 0) ? sanitizedGroupIds[0] : null,
                 scheduledAt: scheduleTime,
                 timezone: body.timezone || "UTC",
-                status: "pending",
+                status: isScheduled ? "pending" : "processing",
                 contentId: post.id
             }
         });
 
+        // 7. IMMEDIATE TRIGGER: Bypass worker if not scheduled
+        let inngestResult = null;
+        if (!isScheduled) {
+            console.log(`[LinkedIn API] Instant publish. Dispatching post ${post.id} to Inngest...`);
+            inngestResult = await inngest.send({
+                name: "linkedin/post.publish",
+                data: {
+                    postId: post.id,
+                    scheduledPostId: scheduledPost.id
+                }
+            });
+        }
+
         return NextResponse.json({
             success: true,
-            message: scheduledAt ? "Post scheduled successfully" : "Post queued for publishing",
+            message: isScheduled ? "Post scheduled successfully" : "Post dispatched for immediate publishing",
             scheduled_at_utc: scheduleTime.toISOString(),
-            postId: post.id
+            postId: post.id,
+            inngestEvent: inngestResult?.ids?.[0] || null
         });
 
 
