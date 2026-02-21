@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Home, Share2, BarChart3, Settings, Layers, Lock, Menu, X } from 'lucide-react';
 import { UserNav } from '@/components/UserNav';
+import { QuotaTracker } from '@/components/QuotaTracker';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
 
@@ -16,6 +17,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             section: 'Overview', items: [
                 { href: '/dashboard', icon: Home, label: 'Dashboard', exact: true },
                 { href: '/dashboard/analytics', icon: BarChart3, label: 'Analytics' },
+                { href: '/dashboard/calendar', icon: Layers, label: 'Content Calendar' },
             ]
         },
         {
@@ -81,6 +83,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     </div>
                 ))}
             </nav>
+            <QuotaTracker />
             <div className="p-4 border-t border-white/10">
                 <div className="px-3 py-2 text-[10px] text-white/20 uppercase tracking-widest font-bold">
                     © 2026 Socialyncara

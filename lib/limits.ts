@@ -6,7 +6,11 @@ export const OPS_LIMITS = {
         DAILY_POSTS: 25,     // Safe limit for personal profiles to avoid spam flags
         MIN_INTERVAL_MINUTES: 15 // Force 15 min gap between posts
     },
-    TIKTOK: {
+    X: {
+        DAILY_POSTS: 25,
+        MIN_INTERVAL_MINUTES: 5
+    },
+    REDDIT: {
         DAILY_POSTS: 10,
         MIN_INTERVAL_MINUTES: 5
     }
@@ -69,5 +73,66 @@ export async function checkPostingLimits(userId: string, platform: string = 'lin
         console.error("Error checking limits:", error);
         // Fail open or closed? Fail closed for safety.
         return { allowed: false, error: "System error checking limits." };
+    }
+}
+
+/**
+ * Gets the current limit status for a user to display on the Frontend UI.
+ */
+export async function getUserLimits(userId: string, platform: string = 'linkedin') {
+    try {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+        const dailyCount = await db.postHistory.count({
+            where: {
+                userId,
+                platform: { equals: platform, mode: 'insensitive' },
+                postedAt: { gte: todayStart, lte: todayEnd },
+                status: 'PUBLISHED'
+            }
+        });
+
+        const limit = (OPS_LIMITS as any)[platform.toUpperCase()]?.DAILY_POSTS || 25;
+        const minInterval = (OPS_LIMITS as any)[platform.toUpperCase()]?.MIN_INTERVAL_MINUTES || 5;
+
+        const lastPost = await db.postHistory.findFirst({
+            where: { userId, platform: { equals: platform, mode: 'insensitive' } },
+            orderBy: { postedAt: 'desc' }
+        });
+
+        let nextPostAvailableAt = now;
+        let isRateLimited = false;
+        if (lastPost) {
+            const postedDate = new Date(lastPost.postedAt);
+            const nextAllowedTime = new Date(postedDate.getTime() + minInterval * 60000);
+            if (now < nextAllowedTime) {
+                isRateLimited = true;
+                nextPostAvailableAt = nextAllowedTime;
+            }
+        }
+
+        return {
+            platform,
+            used: dailyCount,
+            limit,
+            percentage: Math.min(100, Math.round((dailyCount / limit) * 100)),
+            isRateLimited,
+            nextPostAvailableAt: nextPostAvailableAt.toISOString(),
+            exhausted: dailyCount >= limit
+        };
+
+    } catch (e) {
+        console.error("Failed to fetch user limits:", e);
+        return {
+            platform,
+            used: 0,
+            limit: 25,
+            percentage: 0,
+            isRateLimited: false,
+            nextPostAvailableAt: new Date().toISOString(),
+            exhausted: false
+        };
     }
 }
