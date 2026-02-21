@@ -192,8 +192,38 @@ export const cronScheduler = inngest.createFunction(
                         }
                     });
                     return { id, status: "dispatched_to_inngest" };
+                } else if (post.platform === 'rss' || post.platform === 'manual') {
+                    const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
+                    if (!webhookUrl) throw new Error("N8N_PUBLISH_WEBHOOK_URL not configured");
+
+                    const response = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-webhook-secret': process.env.WEBHOOK_SECRET || ''
+                        },
+                        body: JSON.stringify({
+                            postId: post.id,
+                            platform: post.platform,
+                            postType: post.postType,
+                            contentText: post.contentText,
+                        }),
+                        signal: AbortSignal.timeout(30000)
+                    });
+
+                    if (!response.ok) throw new Error(`Webhook Failed: ${response.status}`);
+
+                    await db.scheduledPost.update({
+                        where: { id },
+                        data: {
+                            status: 'published',
+                            publishedAt: new Date(),
+                            updatedAt: new Date()
+                        }
+                    });
+                    return { id, status: "published_via_webhook" };
                 }
-                return { id, status: "platform_not_supported_in_cron_yet" };
+                return { id, status: "platform_not_supported_yet" };
             }));
         }
 
