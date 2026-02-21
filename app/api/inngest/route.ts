@@ -1,6 +1,6 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
-import { publishLinkedInPost, helloWorld } from "@/lib/inngest/functions";
+import { publishLinkedInPost, helloWorld, cronScheduler } from "@/lib/inngest/functions";
 import { scheduledContentIngestion } from "@/lib/inngest/ingestion";
 
 export const { GET, POST, PUT } = serve({
@@ -8,6 +8,7 @@ export const { GET, POST, PUT } = serve({
     functions: [
         publishLinkedInPost,
         helloWorld,
-        scheduledContentIngestion
+        scheduledContentIngestion,
+        cronScheduler
     ],
 });

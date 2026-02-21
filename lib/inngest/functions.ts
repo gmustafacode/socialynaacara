@@ -118,6 +118,7 @@ export const scheduleLinkedInPost = inngest.createFunction(
 
 
 
+
 /**
  * Test function to verify Inngest setup
  */
@@ -128,4 +129,74 @@ export const helloWorld = inngest.createFunction(
         await step.sleep("wait-a-moment", "1s");
         return { message: `Hello ${event.data.email || 'World'}!` };
     },
+);
+
+/**
+ * CRON SCHEDULER: Replaces automation-worker.ts for production (Vercel)
+ * Runs every minute to find due posts and dispatch them.
+ */
+export const cronScheduler = inngest.createFunction(
+    { id: "cron-scheduler", concurrency: 1 }, // Concurrency 1 to prevent multiple collectors running simultaneously
+    { cron: "* * * * *" },
+    async ({ step }) => {
+        // 1. Recover Stale Jobs
+        await step.run("recover-stale-jobs", async () => {
+            const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+            await db.scheduledPost.updateMany({
+                where: {
+                    status: 'processing',
+                    updatedAt: { lte: thirtyMinutesAgo }
+                },
+                data: {
+                    status: 'pending',
+                    lastError: 'Stale post recovery: Reset after processing timeout.'
+                }
+            });
+        });
+
+        // 2. Fetch Due Posts
+        const duePosts = await step.run("fetch-due-posts", async () => {
+            const duePostIds: { id: string }[] = await db.$queryRaw`
+                SELECT id FROM "scheduled_posts"
+                WHERE status = 'pending'
+                AND "scheduledAt" <= NOW()
+                ORDER BY "scheduledAt" ASC
+                LIMIT 20
+                FOR UPDATE SKIP LOCKED;
+            `;
+            return duePostIds;
+        });
+
+        if (duePosts.length === 0) return { message: "No posts due." };
+
+        // 3. Dispatch Each Post
+        const results = [];
+        for (const { id } of duePosts) {
+            results.push(await step.run(`dispatch-${id}`, async () => {
+                const post = await db.scheduledPost.update({
+                    where: { id },
+                    data: {
+                        status: 'processing',
+                        updatedAt: new Date()
+                    }
+                });
+
+                if (post.platform === 'linkedin') {
+                    if (!post.contentId) throw new Error("LinkedIn post missing contentId");
+
+                    await inngest.send({
+                        name: "linkedin/post.publish",
+                        data: {
+                            postId: post.contentId,
+                            scheduledPostId: post.id
+                        }
+                    });
+                    return { id, status: "dispatched_to_inngest" };
+                }
+                return { id, status: "platform_not_supported_in_cron_yet" };
+            }));
+        }
+
+        return { processed: duePosts.length, results };
+    }
 );
