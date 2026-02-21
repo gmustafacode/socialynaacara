@@ -95,35 +95,7 @@ export const publishLinkedInPost = inngest.createFunction(
 );
 
 
-/**
- * DEPRECATED: Scheduler Engine
- * As of v3, scheduling is handled by the backend cron (automation-worker.ts)
- * and the ScheduledPost table. This function is kept momentarily for 
- * inflight jobs but should not be triggered by new API calls.
- */
-/*
-export const scheduleLinkedInPost = inngest.createFunction(
-    {
-        id: "schedule-linkedin-post",
-        ... (commented out code)
-    }
-);
-*/
 
-
-
-
-/**
- * Test function to verify Inngest setup
- */
-export const helloWorld = inngest.createFunction(
-    { id: "hello-world" },
-    { event: "test/hello.world" },
-    async ({ event, step }) => {
-        await step.sleep("wait-a-moment", "1s");
-        return { message: `Hello ${event.data.email || 'World'}!` };
-    },
-);
 
 /**
  * CRON SCHEDULER: Replaces automation-worker.ts for production (Vercel)
@@ -286,7 +258,7 @@ export const aiContentAnalysis = inngest.createFunction(
     },
     [
         { event: "ai/content.analyze" },
-        { cron: "*/1 * * * *" } // Run every 30 minutes by default
+        { cron: "*/30 * * * *" } // Run every 30 minutes by default
     ],
     async ({ event, step }) => {
         const batchSize = event?.data?.batchSize || 10;
