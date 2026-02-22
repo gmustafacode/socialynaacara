@@ -23,42 +23,43 @@ export const OPS_LIMITS = {
 export async function checkPostingLimits(userId: string, platform: string = 'linkedin'): Promise<{ allowed: boolean, error?: string }> {
     try {
         const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        const normalizedPlatform = platform.toLowerCase();
 
-        // 1. Check Daily Limit
+        // 1. Check Daily Limit (UTC Boundary)
+        const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+        const todayEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999));
+
         const dailyCount = await db.postHistory.count({
             where: {
                 userId,
-                platform: { equals: platform, mode: 'insensitive' }, // Case insensitive match
+                platform: { equals: normalizedPlatform, mode: 'insensitive' },
                 postedAt: {
                     gte: todayStart,
                     lte: todayEnd
                 },
-                status: 'PUBLISHED' // Only count successful posts towards limit? Or all attempts? Let's count PUBLISHED + PROCESSING to be safe.
+                status: 'PUBLISHED'
             }
         });
 
-        // Get limit for platform (default to LinkedIn if unknown)
-        const limit = (OPS_LIMITS as any)[platform.toUpperCase()]?.DAILY_POSTS || 20;
+        const platformKey = normalizedPlatform.toUpperCase();
+        const limit = (OPS_LIMITS as any)[platformKey]?.DAILY_POSTS || 20;
 
         if (dailyCount >= limit) {
-            return { allowed: false, error: `Daily limit of ${limit} posts reached for ${platform}.` };
+            return { allowed: false, error: `Daily limit of ${limit} posts reached for ${normalizedPlatform} (UTC day).` };
         }
 
         // 2. Check recent posts (Spam Protection)
-        // Find the most recent post
         const lastPost = await db.postHistory.findFirst({
             where: {
                 userId,
-                platform: { equals: platform, mode: 'insensitive' },
+                platform: { equals: normalizedPlatform, mode: 'insensitive' },
             },
             orderBy: { postedAt: 'desc' }
         });
 
         if (lastPost) {
-            const minInterval = (OPS_LIMITS as any)[platform.toUpperCase()]?.MIN_INTERVAL_MINUTES || 5;
-            const postedDate = new Date(lastPost.postedAt); // Ensure it's a Date object
+            const minInterval = (OPS_LIMITS as any)[platformKey]?.MIN_INTERVAL_MINUTES || 5;
+            const postedDate = new Date(lastPost.postedAt);
             const nextAllowedTime = new Date(postedDate.getTime() + minInterval * 60000);
 
             if (now < nextAllowedTime) {

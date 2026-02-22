@@ -82,7 +82,6 @@ export class LinkedInPostingService {
         const accessToken = await LinkedInAuthService.getValidToken(content.socialAccountId);
 
         // 2. Resolve LinkedIn Identity (URN)
-        // Aligning with Python logic: always ensure we have the correct ID and construct the URN
         let authorUrn = content.socialAccount.platformAccountId;
         let metadata: any = {};
         try {
@@ -91,40 +90,33 @@ export class LinkedInPostingService {
                 : (content.socialAccount.metadata || {});
         } catch (e) { }
 
-        // Aggressive resolution: If no URN, or if it was sourced from OIDC (prone to hashed sub errors), or if it's not a standard URN
-        const isOidcUru = metadata.source === 'oidc' && authorUrn?.startsWith('urn:li:person:');
-        const isMalformed = authorUrn && !authorUrn.startsWith('urn:li:');
-
-        if (!authorUrn || isOidcUru || isMalformed) {
-            console.log(`[LinkedInPosting] Normalizing author identity for account ${content.socialAccountId}. Reason: ${!authorUrn ? 'Missing' : (isOidcUru ? 'OIDC-sourced' : 'Malformed')}`);
+        // If not a full URN, attempt to resolve it correctly
+        if (!authorUrn || !authorUrn.includes('urn:li:')) {
+            console.log(`[LinkedInPosting] Normalizing author URN for account ${content.socialAccountId}. Current: ${authorUrn}`);
             try {
                 const { getLinkedInProfile } = await import('./linkedin-token-validator');
                 const profile = await getLinkedInProfile(accessToken);
 
-                // User's Python logic: "author": f"urn:li:person:{self.user_id}"
-                // We keep organization support if metadata explicitly says so, otherwise follow Python "person" default
-                const prefix = metadata.type === 'organization' ? 'urn:li:organization:' : 'urn:li:person:';
+                // Determine prefix: metadata > profile suggested > fallback person
+                const prefix = metadata.type === 'organization' ? 'urn:li:organization:' :
+                    (metadata.type === 'person' ? 'urn:li:person:' :
+                        ((profile as any).suggestedUrnPrefix || 'urn:li:person:'));
 
-                // If profile.id is already a URN, use it, otherwise join with prefix
                 authorUrn = profile.id.startsWith('urn:li:') ? profile.id : `${prefix}${profile.id}`;
 
-                console.log(`[LinkedInPosting] Resolved URN: ${authorUrn} (ID Source: ${profile.source})`);
+                console.log(`[LinkedInPosting] Resolved URN: ${authorUrn} (Source: ${profile.source})`);
 
-                // Update DB and local metadata to reflect the stable legacy source
-                const updatedMetadata = { ...metadata, source: profile.source };
+                // Save resolved URN for future use
                 await db.socialAccount.update({
                     where: { id: content.socialAccountId },
-                    data: {
-                        platformAccountId: authorUrn,
-                        metadata: JSON.stringify(updatedMetadata)
-                    }
+                    data: { platformAccountId: authorUrn }
                 });
             } catch (error: any) {
                 console.error("[LinkedInPosting] Identity resolution failed:", error);
             }
         }
 
-        if (!authorUrn) throw new Error("Could not resolve LinkedIn User/Organization ID after re-resolution");
+        if (!authorUrn) throw new Error("Could not resolve LinkedIn User/Organization ID");
 
         // Validation
         const description = content.description || "";
@@ -218,8 +210,9 @@ export class LinkedInPostingService {
 
         // 6. Update Status (Source agnostic)
         const finalStatus = errors.length === 0 ? 'PUBLISHED' : (results.length > 0 ? 'PARTIAL_SUCCESS' : 'FAILED');
+        const finalStatusUpper = finalStatus.toUpperCase();
         const updatePayload = {
-            status: finalStatus,
+            status: finalStatusUpper,
             linkedinPostUrn: results.join(', '),
             errorMessage: errors.length > 0 ? errors.join(' | ').substring(0, 1000) : null,
             updatedAt: new Date()
@@ -227,14 +220,14 @@ export class LinkedInPostingService {
 
         // Update the actual source table
         if (isLinkedInTable) {
-            await db.linkedInPost.update({ where: { id: postId }, data: updatePayload });
+            await db.linkedInPost.update({ where: { id: postId }, data: updatePayload as any });
         } else {
             // Update ContentQueue if that was the source
             await db.contentQueue.update({
                 where: { id: postId },
                 data: {
-                    status: finalStatus === 'PUBLISHED' ? 'published' : (finalStatus === 'FAILED' ? 'failed' : 'pending'),
-                    publishedAt: finalStatus === 'PUBLISHED' ? new Date() : null
+                    status: finalStatusUpper === 'PUBLISHED' ? 'published' : (finalStatusUpper === 'FAILED' ? 'failed' : 'pending'),
+                    publishedAt: finalStatusUpper === 'PUBLISHED' ? new Date() : null
                 }
             }).catch(() => { });
         }
@@ -255,58 +248,97 @@ export class LinkedInPostingService {
         // Container is for groups
         const containerUrn = groupIds && groupIds.length > 0 ? `urn:li:group:${groupIds[0]}` : undefined;
 
-        // Aligning with user's Python logic
         let shareMediaCategory = "NONE";
         let media: any[] = [];
+        let finalDescription = description;
 
+        // Enhanced Media Categorization
         const hasMediaUrls = mediaUrls && mediaUrls.length > 0;
-        const isVideo = postType === 'VIDEO' || !!youtubeUrl;
-        const isImage = postType === 'IMAGE' || (hasMediaUrls && !isVideo);
+        const isImage = postType === 'IMAGE' || postType === 'IMAGE_TEXT' || (hasMediaUrls && !youtubeUrl);
+        const isVideo = postType === 'VIDEO' || postType === 'VIDEO_TEXT' || !!youtubeUrl;
+        const isArticle = postType === 'ARTICLE';
 
-        if (isVideo) {
+        // STRATEGY: For maximum "Big Thumbnail" impact, we prefer the IMAGE category
+        // with a native asset upload, even for links and videos.
+        if (isImage || (thumbnailUrl && (isVideo || isArticle))) {
+            shareMediaCategory = "IMAGE";
+
+            // Process images: Download and upload to LinkedIn to get Asset URNs
+            const mediaSources = isImage ? (mediaUrls || []) : [thumbnailUrl];
+
+            const assets: string[] = [];
+            for (const url of mediaSources) {
+                if (!url) continue;
+                if (url.startsWith('urn:li:digitalmediaAsset')) {
+                    assets.push(url);
+                    continue;
+                }
+                try {
+                    const assetUrn = await this.uploadImageToLinkedIn(accessToken, authorUrn, url);
+                    if (assetUrn) assets.push(assetUrn);
+                } catch (e) {
+                    console.error("[LinkedInPosting] Image upload failed for URL:", url, e);
+                }
+            }
+
+            if (assets.length > 0) {
+                media = assets.map(assetUrn => ({
+                    status: "READY",
+                    media: assetUrn,
+                    // For single hero images, we omit title/description inside 'media'
+                    // to force LinkedIn to prioritize the image as a "Full Width" element.
+                    ...(assets.length > 1 ? {
+                        description: { text: description.substring(0, 200) },
+                        title: { text: title || "Gallery Image" }
+                    } : {})
+                }));
+
+                // If this was originally a video/article, inject the link into the caption
+                if (isVideo || isArticle) {
+                    const link = youtubeUrl || (hasMediaUrls ? mediaUrls![0] : "");
+                    if (link && !finalDescription.includes(link)) {
+                        finalDescription = `${description}\n\n🔗 ${link}`;
+                    }
+                }
+            } else if (isVideo || isArticle) {
+                // Total fallback to ARTICLE if native upload fails
+                shareMediaCategory = "ARTICLE";
+                media = [{
+                    status: "READY",
+                    description: { text: description },
+                    originalUrl: youtubeUrl || (hasMediaUrls ? mediaUrls![0] : undefined),
+                    title: { text: title || (isVideo ? "Shared Video" : "Shared Article") },
+                    thumbnails: thumbnailUrl ? [{ url: thumbnailUrl }] : []
+                }];
+            }
+        } else if (isVideo || isArticle) {
             shareMediaCategory = "ARTICLE";
             media = [{
                 status: "READY",
                 description: { text: description },
                 originalUrl: youtubeUrl || (hasMediaUrls ? mediaUrls![0] : undefined),
-                title: { text: title || "Shared Video" },
-                thumbnails: thumbnailUrl ? [{ url: thumbnailUrl }] : (youtubeUrl ? [{ url: this.getYoutubeMetadata(youtubeUrl)?.thumbnailUrl }] : [])
+                title: { text: title || (isVideo ? "Shared Video" : "Shared Article") }
             }];
-        } else if (isImage) {
-            shareMediaCategory = "IMAGE";
-            // Native asset upload still required for IMAGE category in ugcPosts
-            const assets: string[] = [];
-            for (const url of (mediaUrls || [])) {
-                try {
-                    const assetUrn = await this.uploadImageToLinkedIn(accessToken, authorUrn, url);
-                    if (assetUrn) assets.push(assetUrn);
-                } catch (e) { }
-            }
-            media = assets.map(asset => ({ status: "READY", media: asset }));
         }
 
-        const payload: any = {
+        const payload = {
             author: authorUrn,
             lifecycleState: "PUBLISHED",
             specificContent: {
                 "com.linkedin.ugc.ShareContent": {
                     shareCommentary: {
-                        text: description
+                        text: finalDescription
                     },
                     shareMediaCategory: shareMediaCategory,
                     media: shareMediaCategory === "NONE" ? undefined : media
                 }
             },
             visibility: {
-                "com.linkedin.ugc.MemberNetworkVisibility": visibility // PUBLIC or CONTAINER
+                "com.linkedin.ugc.MemberNetworkVisibility": visibility
             }
         };
 
-        if (visibility === 'CONTAINER' && containerUrn) {
-            payload.containerEntity = containerUrn;
-        }
-
-        console.log(`[LinkedInPosting] Creating UGC Post (Aligned) with author: ${authorUrn}, category: ${shareMediaCategory}`);
+        console.log(`[LinkedInPosting] Creating UGC Post with author: ${authorUrn}, category: ${shareMediaCategory}`);
 
         if (visibility === 'CONTAINER' && containerUrn) {
             (payload as any).containerEntity = containerUrn;
@@ -392,16 +424,15 @@ export class LinkedInPostingService {
      * Extracts YouTube ID and generates metadata.
      */
     static getYoutubeMetadata(url: string) {
-        // Exact Regex from user logic
-        const exp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-        const match = url.match(exp);
-        const videoId = (match && match[match.length - 1].length === 11) ? match[match.length - 1] : null;
+        const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
+        const match = url.match(regExp);
+        const videoId = (match && match[7].length === 11) ? match[7] : null;
 
         if (!videoId) return null;
 
         return {
             videoId,
-            thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`, // Exact thumbnail logic from user
+            thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
             embedUrl: `https://www.youtube.com/embed/${videoId}`
         };
     }

@@ -37,7 +37,7 @@ export const masterOrchestrator = inngest.createFunction(
                 await inngest.send({ name: "app/content.generate", data: payload });
                 break;
             case "PUBLISH_NOW":
-                await inngest.send({ name: "linkedin/post.publish", data: payload });
+                await inngest.send({ name: "app/post.publish_now", data: payload });
                 break;
             case "SCHEDULE_POST":
                 // Scheduled via DB, trigger any real-time processing needed here
@@ -210,21 +210,33 @@ export const schedulerPublisher = inngest.createFunction(
         }
 
         // --- SCHEDULER ENGINE (Cron Tick) ---
-        const duePosts = await step.run("fetch-due-posts", async () => {
+        const duePosts = await step.run("fetch-due-posts-atomic", async () => {
+            // Atomic update to 'processing' to ensure no other cron tick grabs these
+            // Using queryRaw for FOR UPDATE SKIP LOCKED
             const posts: any[] = await db.$queryRaw`
-                SELECT id, "userId", platform, "content_id" as "contentId", "socialAccountId", "postType", "contentText" 
-                FROM "scheduled_posts"
-                WHERE status = 'pending'
-                AND "scheduledAt" <= NOW()
-                ORDER BY "scheduledAt" ASC
-                LIMIT 100
-                FOR UPDATE SKIP LOCKED;
+                WITH target_posts AS (
+                    SELECT id 
+                    FROM "scheduled_posts"
+                    WHERE status = 'pending'
+                    AND "scheduledAt" <= NOW()
+                    AND "retry_count" < 5
+                    ORDER BY "scheduledAt" ASC
+                    LIMIT 20
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE "scheduled_posts"
+                SET status = 'processing', "updatedAt" = NOW()
+                WHERE id IN (SELECT id FROM target_posts)
+                RETURNING id, "userId", platform, "content_id" as "contentId", "socialAccountId", "postType", "contentText", "retry_count" as "retryCount", "scheduledAt";
             `;
+
             return posts.map(p => ({
                 ...p,
                 contentId: p.contentId || p.contentid,
                 userId: p.userId || p.userid,
-                socialAccountId: p.socialAccountId || p.socialaccountid
+                socialAccountId: p.socialAccountId || p.socialaccountid,
+                retryCount: p.retryCount || p.retrycount || 0,
+                scheduledAt: p.scheduledAt || p.scheduledat
             }));
         });
 
@@ -236,49 +248,73 @@ export const schedulerPublisher = inngest.createFunction(
                 try {
                     const limitCheck = await checkPostingLimits(post.userId, post.platform);
                     if (!limitCheck.allowed) {
+                        // Exponential backoff for rate limits: (retryCount + 1) * 15 minutes
+                        const backoffMinutes = (post.retryCount + 1) * 15;
                         await db.scheduledPost.update({
                             where: { id: post.id },
-                            data: { status: 'pending', scheduledAt: new Date(Date.now() + 5 * 60 * 1000), lastError: `Rate Limit: ${limitCheck.error}` }
+                            data: {
+                                status: 'pending',
+                                scheduledAt: new Date(Date.now() + backoffMinutes * 60000),
+                                lastError: `Rate Limit reached: ${limitCheck.error}`,
+                                retryCount: { increment: 1 }
+                            }
                         });
-                        results.push({ id: post.id, status: "rate_limited" });
+                        results.push({ id: post.id, status: "rate_limited_retry" });
                         continue;
                     }
 
-                    await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'processing', updatedAt: new Date() } });
-
                     if (post.platform === 'linkedin') {
-                        await inngest.send({ name: "linkedin/post.publish", data: { postId: post.contentId, scheduledPostId: post.id } });
+                        await inngest.send({
+                            name: "linkedin/post.publish",
+                            data: { postId: post.contentId, scheduledPostId: post.id },
+                            idempotencyKey: `publish-li-${post.id}-${new Date(post.scheduledAt).getTime()}`
+                        });
                         results.push({ id: post.id, status: "dispatched_to_native_inngest" });
                         continue;
                     }
 
-                    if (post.platform !== 'linkedin') {
-                        const accessToken = await getValidAccessToken(post.socialAccountId);
-                        const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
-                        if (!webhookUrl) throw new Error("Universal Publisher Webhook Missing");
+                    // UNIVERSAL PUBLISHER (Rest of platforms via N8N/Webhook)
+                    const accessToken = await getValidAccessToken(post.socialAccountId);
+                    const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
+                    if (!webhookUrl) throw new Error("Universal Publisher Webhook Missing");
 
-                        const resp = await fetch(webhookUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'x-webhook-secret': process.env.WEBHOOK_SECRET || '' },
-                            body: JSON.stringify({
-                                postId: post.id,
-                                accessToken,
-                                platform: post.platform,
-                                contentText: post.contentText,
-                                callbackUrl: `${getBaseUrl()}/api/posts/update-status`
-                            }),
-                            signal: AbortSignal.timeout(20000)
-                        });
+                    const resp = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-webhook-secret': process.env.WEBHOOK_SECRET || '' },
+                        body: JSON.stringify({
+                            postId: post.id,
+                            accessToken,
+                            platform: post.platform,
+                            contentText: post.contentText,
+                            callbackUrl: `${getBaseUrl()}/api/posts/update-status`
+                        }),
+                        signal: AbortSignal.timeout(20000)
+                    });
 
-                        if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
+                    if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
 
-                        await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'published', publishedAt: new Date() } });
-                        results.push({ id: post.id, status: "published_via_webhook" });
-                        continue;
-                    }
+                    // Note: update-status webhook will set 'published', but we mark it here too just in case callback fails
+                    // or let the callback handle it. For reliability, we mark as processing until callback or a timeout.
+                    // However, current implementation marks as published. Let's keep it consistent.
+                    await db.scheduledPost.update({
+                        where: { id: post.id },
+                        data: { status: 'published', publishedAt: new Date(), updatedAt: new Date() }
+                    });
+                    results.push({ id: post.id, status: "published_via_webhook" });
+
                 } catch (err: any) {
-                    await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'failed', lastError: err.message, updatedAt: new Date() } });
-                    results.push({ id: post.id, status: "failed", error: err.message });
+                    const isMaxRetries = post.retryCount >= 4;
+                    await db.scheduledPost.update({
+                        where: { id: post.id },
+                        data: {
+                            status: isMaxRetries ? 'failed' : 'pending',
+                            lastError: err.message,
+                            retryCount: { increment: 1 },
+                            scheduledAt: isMaxRetries ? undefined : new Date(Date.now() + (post.retryCount + 1) * 10 * 60000), // Backoff
+                            updatedAt: new Date()
+                        }
+                    });
+                    results.push({ id: post.id, status: isMaxRetries ? "failed_max_retries" : "retry_queued", error: err.message });
                 }
             }
             return results;

@@ -1,18 +1,15 @@
-
-import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import db from "@/lib/db";
+import { apiResponse, handleApiError } from "@/lib/api-utils";
 
 export async function GET() {
-    const session = await getServerSession(authOptions);
-    if (!session || !session.user) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const userId = (session.user as any).id;
-
     try {
+        const session = await getServerSession(authOptions);
+        if (!session?.user) return apiResponse.unauthorized();
+
+        const userId = (session.user as any).id;
+
         const accounts = await db.socialAccount.findMany({
             where: { userId },
             select: {
@@ -31,12 +28,20 @@ export async function GET() {
 
         const sanitizedAccounts = accounts.map(account => {
             const isEnterprise = !!account.encryptedClientId && !!account.encryptedClientSecret;
-            const metadata = account.metadata ? JSON.parse(account.metadata) : {};
+            let metadata = {};
+            try {
+                metadata = typeof account.metadata === 'string'
+                    ? JSON.parse(account.metadata)
+                    : (account.metadata || {});
+            } catch (e) {
+                console.warn(`[API Accounts] Failed to parse metadata for ${account.id}`);
+            }
 
             // Standardize LinkedIn metadata fields
             if (account.platform === 'linkedin') {
-                metadata.name = metadata.name || metadata.username || 'LinkedIn User';
-                metadata.picture = metadata.picture || metadata.profilePicture || null;
+                const md = metadata as any;
+                md.name = md.name || md.username || 'LinkedIn User';
+                md.picture = md.picture || md.profilePicture || null;
             }
 
             return {
@@ -52,9 +57,8 @@ export async function GET() {
             };
         });
 
-        return NextResponse.json(sanitizedAccounts);
+        return apiResponse.success(sanitizedAccounts);
     } catch (error) {
-        console.error("Failed to fetch accounts:", error);
-        return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+        return handleApiError(error);
     }
 }

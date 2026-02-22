@@ -1,15 +1,32 @@
-import { NextResponse } from 'next/server'
-import { getServerSession } from "next-auth"
-import { authOptions } from "@/lib/auth"
-import db from "@/lib/db"
+
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import db from "@/lib/db";
+import { apiResponse, handleApiError } from "@/lib/api-utils";
+import { z } from "zod";
+
+const ContentQueueSchema = z.object({
+    contentType: z.enum(['text', 'image', 'video', 'link']).default('text'),
+    contentData: z.object({
+        title: z.string().optional(),
+        summary: z.string().optional(),
+        text: z.string().optional(),
+        content: z.string().optional(),
+        mediaUrl: z.string().url().optional(),
+    }),
+    viralScore: z.number().min(0).max(100).optional().default(0),
+    source: z.string().optional().default('manual'),
+    sourceUrl: z.string().url().optional().nullable(),
+    mediaUrl: z.string().url().optional().nullable(),
+});
 
 export async function GET(request: Request) {
-    const session = await getServerSession(authOptions)
-    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
-    const userId = (session.user as any).id
-
     try {
+        const session = await getServerSession(authOptions);
+        if (!session?.user) return apiResponse.unauthorized();
+
+        const userId = (session.user as any).id;
+
         const queue = await db.contentQueue.findMany({
             where: {
                 OR: [
@@ -26,46 +43,45 @@ export async function GET(request: Request) {
                     where: { userId } // Only show history relative to this user
                 }
             }
-        })
-        return NextResponse.json(queue)
-    } catch (e) {
-        return NextResponse.json({ error: "Internal Error" }, { status: 500 })
+        });
+        return apiResponse.success(queue);
+    } catch (error) {
+        return handleApiError(error);
     }
 }
 
 export async function POST(request: Request) {
-    const session = await getServerSession(authOptions)
-    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
     try {
-        const body = await request.json()
-        const { contentType, contentData, viralScore, source, sourceUrl, mediaUrl } = body
-        const userId = (session.user as any).id
+        const session = await getServerSession(authOptions);
+        if (!session?.user) return apiResponse.unauthorized();
+        const userId = (session.user as any).id;
 
-        if (sourceUrl) {
-            const existing = await db.contentQueue.findUnique({ where: { sourceUrl } });
+        const json = await request.json();
+        const body = ContentQueueSchema.parse(json);
+
+        if (body.sourceUrl) {
+            const existing = await db.contentQueue.findUnique({ where: { sourceUrl: body.sourceUrl } });
             if (existing) {
-                return NextResponse.json({ error: "Content already exists in queue" }, { status: 409 });
+                return apiResponse.error("Content already exists in queue", 409);
             }
         }
 
         const item = await db.contentQueue.create({
             data: {
                 userId,
-                contentType: contentType || 'text',
-                source: source || 'manual', // Schema requires source
-                sourceUrl: sourceUrl || null,
-                title: contentData?.title || null,
-                summary: contentData?.summary || null,
-                rawContent: contentData?.text || contentData?.content || null,
-                mediaUrl: mediaUrl || contentData?.mediaUrl || null,
-                viralScore: viralScore || 0,
+                contentType: body.contentType,
+                source: body.source,
+                sourceUrl: body.sourceUrl,
+                title: body.contentData.title || null,
+                summary: body.contentData.summary || null,
+                rawContent: body.contentData.text || body.contentData.content || null,
+                mediaUrl: body.mediaUrl || body.contentData.mediaUrl || null,
+                viralScore: body.viralScore,
                 status: 'pending'
             }
-        })
-        return NextResponse.json(item)
-    } catch (e: any) {
-        console.error("[Content API] Create Error:", e)
-        return NextResponse.json({ error: "Creation failed: " + e.message }, { status: 500 })
+        });
+        return apiResponse.success(item, 201);
+    } catch (error) {
+        return handleApiError(error);
     }
 }

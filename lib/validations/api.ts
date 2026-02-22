@@ -57,3 +57,21 @@ export const PreferencesSchema = z.object({
     postingFrequency: z.string().optional(),
     automationLevel: z.enum(["Manual", "Semi-Auto", "Full Auto"]).optional(),
 });
+
+/**
+ * Post Status Filtering
+ */
+export const PostStatusSchema = z.enum(["PENDING", "PROCESSING", "PUBLISHED", "FAILED", "CANCELLED", "PARTIAL_SUCCESS"]);
+
+/**
+ * Raw Post Creation (For manual entry via API)
+ */
+export const PostCreateSchema = z.object({
+    socialAccountId: z.string().uuid(),
+    postType: z.enum(["ARTICLE", "IMAGE", "VIDEO", "POLL", "CAROUSEL"]).default("ARTICLE"),
+    contentText: z.string().min(1).max(3000),
+    mediaUrl: z.string().url().optional().nullable(),
+    targetType: z.enum(["FEED", "GROUP", "STORY"]).optional().default("FEED"),
+    targetId: z.string().optional().nullable(),
+    scheduledAt: z.string().datetime().optional().nullable(),
+});

@@ -85,15 +85,27 @@ export class SchedulerService {
         let inngestEventId = null;
         if (!isScheduled) {
             const eventName = normalizedPlatform === 'linkedin' ? "linkedin/post.publish" : "app/post.publish_now";
-            const dispatch = await inngest.send({
-                name: eventName,
-                data: {
-                    postId: result.trackingId || result.scheduledPostId,
-                    scheduledPostId: result.scheduledPostId,
-                    platform: normalizedPlatform
-                }
-            });
-            inngestEventId = dispatch.ids[0];
+            try {
+                const dispatch = await inngest.send({
+                    name: eventName,
+                    data: {
+                        postId: result.trackingId || result.scheduledPostId,
+                        scheduledPostId: result.scheduledPostId,
+                        platform: normalizedPlatform
+                    },
+                    // Idempotency Key to prevent duplicate dispatches in cases of timeout/retry
+                    idempotencyKey: `publish-${result.scheduledPostId}-${scheduleTime.getTime()}`
+                });
+                inngestEventId = dispatch.ids[0];
+                console.log(`[SchedulerService] Dispatched ${eventName} for post ${result.scheduledPostId}. EventId: ${inngestEventId}`);
+            } catch (dispatchError: any) {
+                console.error(`[SchedulerService] CRITICAL: Failed to dispatch Inngest event for post ${result.scheduledPostId}:`, dispatchError.message);
+                // Mark post as failed if we can't even dispatch it
+                await db.scheduledPost.update({
+                    where: { id: result.scheduledPostId },
+                    data: { status: 'failed', lastError: `Dispatch Failure: ${dispatchError.message}` }
+                }).catch(() => { });
+            }
         }
 
         return {
