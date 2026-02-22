@@ -176,6 +176,9 @@ export default function UniversalComposer() {
                 scheduledAtIso = scheduledDate.toISOString()
             }
 
+            let successCount = 0
+            let failCount = 0
+
             // Dispatch to Orchestrator for EACH selected account
             for (const accountId of selectedAccounts) {
                 const res = await fetch('/api/posts', {
@@ -192,12 +195,22 @@ export default function UniversalComposer() {
                     })
                 })
 
-                if (!res.ok) {
-                    console.error(`Failed to dispatch for account ${accountId}`)
+                if (res.ok) {
+                    successCount++
+                } else {
+                    failCount++
+                    const errData = await res.json().catch(() => ({}))
+                    console.error(`Failed to dispatch for account ${accountId}:`, errData)
                 }
             }
 
-            toast.success(formData.scheduledAt ? "Posts successfully queued by Scheduler Agent!" : "Posts instantly dispatched by Publisher Agent!")
+            if (failCount > 0 && successCount === 0) {
+                throw new Error(`All ${failCount} dispatch(es) failed. Check your account connection.`)
+            } else if (failCount > 0) {
+                toast.warning(`Dispatched to ${successCount} account(s). ${failCount} failed — check the Queue for details.`)
+            } else {
+                toast.success(formData.scheduledAt ? "Posts successfully queued by Scheduler Agent!" : "Posts instantly dispatched by Publisher Agent!")
+            }
             router.push('/dashboard/queue')
 
         } catch (error: any) {

@@ -245,7 +245,7 @@ function LinkedInPostContent() {
 
             if (res.ok) {
                 toast.success(formData.scheduledAt ? "Post scheduled! (Will be processed in our next 10-min window)" : "Post publishing initiated!")
-                router.push('/dashboard/linkedin/control-panel')
+                router.push('/dashboard/queue')
             } else {
                 const error = await res.json()
                 throw new Error(error.error || "Failed to create post")

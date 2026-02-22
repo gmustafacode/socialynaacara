@@ -311,7 +311,11 @@ export default function QueuePage() {
                                                         size="sm"
                                                         onClick={async () => {
                                                             try {
-                                                                const res = await fetch(`/api/linkedin/posts/${post.id}/retry`, { method: 'POST' })
+                                                                // LinkedIn posts use the dedicated retry endpoint; generic ScheduledPosts use the cancel+reschedule approach
+                                                                const retryUrl = post._type === 'linkedin'
+                                                                    ? `/api/linkedin/posts/${post.id}/retry`
+                                                                    : `/api/posts/scheduled/${post.id}/retry`
+                                                                const res = await fetch(retryUrl, { method: 'POST' })
                                                                 if (res.ok) {
                                                                     toast.success("Post queued for retry!")
                                                                     fetchData()
