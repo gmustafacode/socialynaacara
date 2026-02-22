@@ -204,9 +204,16 @@ export const schedulerPublisher = inngest.createFunction(
                     await step.run("sync-scheduled-post", async () => {
                         const r = result as any;
                         const externalId = r.results?.[0] || null;
+                        const isSuccess = r.status === 'PUBLISHED' || r.status === 'PARTIAL_SUCCESS';
+
                         await db.scheduledPost.update({
                             where: { id: scheduledPostId },
-                            data: { status: 'published', publishedAt: new Date(), externalPostId: externalId }
+                            data: {
+                                status: isSuccess ? 'published' : 'failed',
+                                publishedAt: isSuccess ? new Date() : null,
+                                externalPostId: externalId,
+                                lastError: isSuccess ? null : (r.errors?.join(' | ') || 'Publishing skipped or failed')
+                            }
                         });
                     });
                 }
@@ -320,7 +327,7 @@ export const schedulerPublisher = inngest.createFunction(
                                         socialAccountId: socialAccount.id,
                                         postType: 'TEXT',
                                         description: generatedContentText,
-                                        targetType: 'Person',
+                                        targetType: 'FEED',
                                         visibility: 'PUBLIC',
                                         status: 'PENDING',
                                     }
@@ -335,7 +342,7 @@ export const schedulerPublisher = inngest.createFunction(
                                     platform,
                                     postType: nextContentType.toUpperCase(),
                                     contentText: generatedContentText,
-                                    targetType: 'Profile',
+                                    targetType: 'FEED',
                                     status: 'pending',
                                     scheduledAt: new Date(),
                                     contentId

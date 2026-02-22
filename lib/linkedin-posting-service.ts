@@ -160,8 +160,13 @@ export class LinkedInPostingService {
             }
         }
 
-        // 4. Handle Feed Post
-        if (content.targetType === 'FEED' || !content.targetType) {
+        // 4. Handle Feed Post (Including synonyms)
+        const isFeedPost = content.targetType === 'FEED' ||
+            content.targetType === 'Person' ||
+            content.targetType === 'Profile' ||
+            !content.targetType;
+
+        if (isFeedPost) {
             try {
                 const urn = await this.createUgcPost(accessToken, authorUrn, {
                     postType: content.postType,
@@ -209,7 +214,10 @@ export class LinkedInPostingService {
         }
 
         // 6. Update Status (Source agnostic)
-        const finalStatus = errors.length === 0 ? 'PUBLISHED' : (results.length > 0 ? 'PARTIAL_SUCCESS' : 'FAILED');
+        // CRITICAL FIX: If no attempts were made, report as FAILED instead of silently logging success
+        const finalStatus = results.length > 0
+            ? (errors.length === 0 ? 'PUBLISHED' : 'PARTIAL_SUCCESS')
+            : (errors.length > 0 ? 'FAILED' : 'FAILED_NO_ATTEMPT');
         const finalStatusUpper = finalStatus.toUpperCase();
         const updatePayload = {
             status: finalStatusUpper,
