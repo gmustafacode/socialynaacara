@@ -129,7 +129,7 @@ export const contentEngine = inngest.createFunction(
 export const schedulerPublisher = inngest.createFunction(
     { id: "scheduler-publisher", concurrency: 5 },
     [
-        { cron: "*/50 * * * *" }, // Scheduler Engine Tick
+        { cron: "*/1 * * * *" }, // Engine Tick (Automation + Scheduler)
         { event: "linkedin/post.publish" }, // Immediate Publisher (Legacy Support)
         { event: "app/post.publish_now" }, // Immediate Publisher (Universal Support)
         { event: "linkedin/post.schedule" }, // sleep-until precise delivery
@@ -138,6 +138,7 @@ export const schedulerPublisher = inngest.createFunction(
     async ({ event, step, runId }) => {
         const isImmediate = event.name === "linkedin/post.publish" || event.name === "app/post.publish_now";
         const isScheduledEvent = event.name === "linkedin/post.schedule" || event.name === "app/post.schedule";
+        const isCron = !event.name;
         const startTime = Date.now();
 
         // --- EXACT TIME SCHEDULED PUBLISHER (Sleep-Until) ---
@@ -248,136 +249,225 @@ export const schedulerPublisher = inngest.createFunction(
             }
         }
 
-        // --- SCHEDULER ENGINE (Cron Tick) ---
-        const duePosts = await step.run("fetch-due-posts-atomic", async () => {
-            // Atomic update to 'processing' to ensure no other cron tick grabs these
-            // Using queryRaw for FOR UPDATE SKIP LOCKED
-            const posts: any[] = await db.$queryRaw`
-                WITH target_posts AS (
-                    SELECT id 
-                    FROM "scheduled_posts"
-                    WHERE status = 'pending'
-                    AND "scheduledAt" <= NOW()
-                    AND "retry_count" < 5
-                    ORDER BY "scheduledAt" ASC
-                    LIMIT 20
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE "scheduled_posts"
-                SET status = 'processing', "updatedAt" = NOW()
-                WHERE id IN (SELECT id FROM target_posts)
-                RETURNING id, "userId", platform, "content_id" as "contentId", "socialAccountId", "postType", "contentText", "retry_count" as "retryCount", "scheduledAt";
-            `;
+        // --- ENGINE TICK (CRON) ---
+        if (isCron) {
+            const now = new Date();
 
-            return posts.map(p => ({
-                ...p,
-                contentId: p.contentId || p.contentid,
-                userId: p.userId || p.userid,
-                socialAccountId: p.socialAccountId || p.socialaccountid,
-                retryCount: p.retryCount || p.retrycount || 0,
-                scheduledAt: p.scheduledAt || p.scheduledat
-            }));
-        });
+            // 1. AUTOMATION TRIGGER PHASE
+            const automationResults = await step.run("automation-trigger-evaluation", async () => {
+                const preferences = await db.preference.findMany({
+                    where: {
+                        automationLevel: { in: ['Full Auto', 'Semi-Auto'] },
+                        postingSchedule: { not: { equals: null } }
+                    }
+                });
 
-        if (duePosts.length === 0) return { message: "No posts due." };
+                const triggered = [];
+                for (const pref of preferences) {
+                    const schedule = typeof pref.postingSchedule === 'string'
+                        ? JSON.parse(pref.postingSchedule)
+                        : pref.postingSchedule;
 
-        const processResults = await step.run("dispatch-all-posts", async () => {
-            const results = [];
-            for (const post of duePosts) {
-                try {
-                    const limitCheck = await checkPostingLimits(post.userId, post.platform);
-                    if (!limitCheck.allowed) {
-                        // Exponential backoff for rate limits: (retryCount + 1) * 15 minutes
-                        const backoffMinutes = (post.retryCount + 1) * 15;
+                    if (!Array.isArray(schedule) || schedule.length === 0) continue;
+
+                    const isDue = isTriggerDue(schedule as any, (pref as any).timezone, now);
+                    if (isDue) triggered.push(pref.userId);
+                }
+                return triggered;
+            });
+
+            // Process each triggered automation
+            for (const userId of automationResults) {
+                await step.run(`process-automation-${userId}-${now.getTime()}`, async () => {
+                    const pref = await db.preference.findUnique({ where: { userId } });
+                    if (!pref) return;
+
+                    const nextContentType = await getNextContentType(pref.userId, pref.preferredContentTypes);
+                    const topic = `A ${nextContentType} post about ${pref.industryNiche || 'my name'} for ${pref.brandName || 'my brand'} focusing on ${pref.contentGoals || 'growth'}`;
+
+                    const generatedContentText = await AIService.generateContent(
+                        pref.userId,
+                        topic,
+                        pref.audienceType || 'General public',
+                        'Professional'
+                    ) || `Generating ${nextContentType} content... #Automation`;
+
+                    if (pref.automationLevel === 'Semi-Auto') {
+                        await db.contentQueue.create({
+                            data: {
+                                userId: pref.userId,
+                                source: 'automation',
+                                contentType: nextContentType,
+                                rawContent: generatedContentText,
+                                status: 'pending',
+                                title: `Auto-generated ${nextContentType} content`,
+                            }
+                        });
+                    } else if (pref.automationLevel === 'Full Auto') {
+                        const platforms = pref.preferredPlatforms || [];
+                        for (const platform of platforms) {
+                            const socialAccount = await db.socialAccount.findFirst({
+                                where: { userId: pref.userId, platform, status: 'active' }
+                            });
+                            if (!socialAccount) continue;
+
+                            let contentId = null;
+                            if (platform === 'linkedin') {
+                                const liPost = await db.linkedInPost.create({
+                                    data: {
+                                        userId: pref.userId,
+                                        socialAccountId: socialAccount.id,
+                                        postType: 'TEXT',
+                                        description: generatedContentText,
+                                        targetType: 'Person',
+                                        visibility: 'PUBLIC',
+                                        status: 'PENDING',
+                                    }
+                                });
+                                contentId = liPost.id;
+                            }
+
+                            const post = await db.scheduledPost.create({
+                                data: {
+                                    userId: pref.userId,
+                                    socialAccountId: socialAccount.id,
+                                    platform,
+                                    postType: nextContentType.toUpperCase(),
+                                    contentText: generatedContentText,
+                                    targetType: 'Profile',
+                                    status: 'pending',
+                                    scheduledAt: new Date(),
+                                    contentId
+                                }
+                            });
+
+                            await inngest.send({
+                                name: platform === 'linkedin' ? "linkedin/post.publish" : "app/post.publish_now",
+                                data: {
+                                    postId: platform === 'linkedin' ? contentId : post.id,
+                                    scheduledPostId: post.id,
+                                    platform
+                                },
+                            });
+                        }
+                    }
+                });
+            }
+
+            // 2. SCHEDULER DISPATCH PHASE
+            const duePosts = await step.run("fetch-due-posts-atomic", async () => {
+                const posts: any[] = await db.$queryRaw`
+                    WITH target_posts AS (
+                        SELECT id FROM "scheduled_posts"
+                        WHERE status = 'pending' AND "scheduledAt" <= NOW() AND "retry_count" < 5
+                        ORDER BY "scheduledAt" ASC LIMIT 20
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE "scheduled_posts"
+                    SET status = 'processing', "updatedAt" = NOW()
+                    WHERE id IN (SELECT id FROM target_posts)
+                    RETURNING id, "userId", platform, "content_id" as "contentId", "socialAccountId", "postType", "contentText", "retry_count" as "retryCount", "scheduledAt";
+                `;
+                return posts.map(p => ({
+                    ...p,
+                    contentId: p.contentId || p.contentid,
+                    userId: p.userId || p.userid,
+                    socialAccountId: p.socialAccountId || p.socialaccountid,
+                    retryCount: p.retryCount || p.retrycount || 0,
+                    scheduledAt: p.scheduledAt || p.scheduledat
+                }));
+            });
+
+            const processResults = await step.run("dispatch-all-posts", async () => {
+                const results = [];
+                for (const post of duePosts) {
+                    try {
+                        const limitCheck = await checkPostingLimits(post.userId, post.platform);
+                        if (!limitCheck.allowed) {
+                            const backoffMinutes = (post.retryCount + 1) * 15;
+                            await db.scheduledPost.update({
+                                where: { id: post.id },
+                                data: {
+                                    status: 'pending',
+                                    scheduledAt: new Date(Date.now() + backoffMinutes * 60000),
+                                    lastError: `Rate Limit reached: ${limitCheck.error}`,
+                                    retryCount: { increment: 1 }
+                                }
+                            });
+                            results.push({ id: post.id, status: "rate_limited_retry" });
+                            continue;
+                        }
+
+                        if (post.platform === 'linkedin') {
+                            await inngest.send({
+                                name: "linkedin/post.publish",
+                                data: { postId: post.contentId, scheduledPostId: post.id },
+                                idempotencyKey: `publish-li-${post.id}-${new Date(post.scheduledAt).getTime()}`
+                            });
+                            results.push({ id: post.id, status: "dispatched_to_native_inngest" });
+                        } else {
+                            const accessToken = await getValidAccessToken(post.socialAccountId);
+                            const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
+                            if (!webhookUrl) throw new Error("Universal Publisher Webhook Missing");
+
+                            const resp = await fetch(webhookUrl, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'x-webhook-secret': process.env.WEBHOOK_SECRET || '' },
+                                body: JSON.stringify({
+                                    postId: post.id,
+                                    accessToken,
+                                    platform: post.platform,
+                                    contentText: post.contentText,
+                                    callbackUrl: `${getBaseUrl()}/api/posts/update-status`
+                                }),
+                                signal: AbortSignal.timeout(20000)
+                            });
+
+                            if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
+                            await db.scheduledPost.update({
+                                where: { id: post.id },
+                                data: { status: 'published', publishedAt: new Date(), updatedAt: new Date() }
+                            });
+                            results.push({ id: post.id, status: "published_via_webhook" });
+                        }
+                    } catch (err: any) {
+                        const isMaxRetries = post.retryCount >= 4;
                         await db.scheduledPost.update({
                             where: { id: post.id },
                             data: {
-                                status: 'pending',
-                                scheduledAt: new Date(Date.now() + backoffMinutes * 60000),
-                                lastError: `Rate Limit reached: ${limitCheck.error}`,
-                                retryCount: { increment: 1 }
+                                status: isMaxRetries ? 'failed' : 'pending',
+                                lastError: err.message,
+                                retryCount: { increment: 1 },
+                                scheduledAt: isMaxRetries ? undefined : new Date(Date.now() + (post.retryCount + 1) * 10 * 60000),
+                                updatedAt: new Date()
                             }
                         });
-                        results.push({ id: post.id, status: "rate_limited_retry" });
-                        continue;
+                        results.push({ id: post.id, status: isMaxRetries ? "failed_max_retries" : "retry_queued", error: err.message });
                     }
+                }
+                return results;
+            });
 
-                    if (post.platform === 'linkedin') {
-                        await inngest.send({
-                            name: "linkedin/post.publish",
-                            data: { postId: post.contentId, scheduledPostId: post.id },
-                            idempotencyKey: `publish-li-${post.id}-${new Date(post.scheduledAt).getTime()}`
-                        });
-                        results.push({ id: post.id, status: "dispatched_to_native_inngest" });
-                        continue;
+            const publishedCount = processResults.filter((r: any) => r.status === "dispatched_to_native_inngest" || r.status === "published_via_webhook").length;
+            const failedCount = processResults.filter((r: any) => r.status === "failed").length;
+
+            await step.run("log-execution", async () => {
+                const finishedAt = new Date();
+                await db.cronExecutionLog.create({
+                    data: {
+                        startedAt: new Date(startTime),
+                        finishedAt,
+                        processed: duePosts.length,
+                        published: publishedCount,
+                        failed: failedCount,
+                        executionTimeMs: finishedAt.getTime() - startTime,
+                        errorsCount: failedCount
                     }
+                }).catch(() => { });
+            });
 
-                    // UNIVERSAL PUBLISHER (Rest of platforms via N8N/Webhook)
-                    const accessToken = await getValidAccessToken(post.socialAccountId);
-                    const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
-                    if (!webhookUrl) throw new Error("Universal Publisher Webhook Missing");
-
-                    const resp = await fetch(webhookUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'x-webhook-secret': process.env.WEBHOOK_SECRET || '' },
-                        body: JSON.stringify({
-                            postId: post.id,
-                            accessToken,
-                            platform: post.platform,
-                            contentText: post.contentText,
-                            callbackUrl: `${getBaseUrl()}/api/posts/update-status`
-                        }),
-                        signal: AbortSignal.timeout(20000)
-                    });
-
-                    if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
-
-                    // Note: update-status webhook will set 'published', but we mark it here too just in case callback fails
-                    // or let the callback handle it. For reliability, we mark as processing until callback or a timeout.
-                    // However, current implementation marks as published. Let's keep it consistent.
-                    await db.scheduledPost.update({
-                        where: { id: post.id },
-                        data: { status: 'published', publishedAt: new Date(), updatedAt: new Date() }
-                    });
-                    results.push({ id: post.id, status: "published_via_webhook" });
-
-                } catch (err: any) {
-                    const isMaxRetries = post.retryCount >= 4;
-                    await db.scheduledPost.update({
-                        where: { id: post.id },
-                        data: {
-                            status: isMaxRetries ? 'failed' : 'pending',
-                            lastError: err.message,
-                            retryCount: { increment: 1 },
-                            scheduledAt: isMaxRetries ? undefined : new Date(Date.now() + (post.retryCount + 1) * 10 * 60000), // Backoff
-                            updatedAt: new Date()
-                        }
-                    });
-                    results.push({ id: post.id, status: isMaxRetries ? "failed_max_retries" : "retry_queued", error: err.message });
-                }
-            }
-            return results;
-        });
-
-        const publishedCount = processResults.filter((r: any) => r.status === "dispatched_to_native_inngest" || r.status === "published_via_webhook").length;
-        const failedCount = processResults.filter((r: any) => r.status === "failed").length;
-
-        await step.run("log-execution", async () => {
-            const finishedAt = new Date();
-            await db.cronExecutionLog.create({
-                data: {
-                    startedAt: new Date(startTime),
-                    finishedAt,
-                    processed: duePosts.length,
-                    published: publishedCount,
-                    failed: failedCount,
-                    executionTimeMs: finishedAt.getTime() - startTime,
-                    errorsCount: failedCount
-                }
-            }).catch(() => { });
-        });
-
-        return { processed: duePosts.length, results: processResults };
+            return { processed: duePosts.length, automationUsers: automationResults.length, results: processResults };
+        }
     }
 );
 
@@ -463,131 +553,4 @@ export const systemUtilities = inngest.createFunction(
     }
 );
 
-/**
- * =========================================================================
- * 🟠 FUNCTION 6 — AUTOMATION TRIGGER ENGINE
- * ============================================================================
- * Purpose: Evaluates user posting schedules and generates content based on sequence.
- */
-export const automationEngine = inngest.createFunction(
-    { id: "automation-engine", concurrency: 1 },
-    [
-        { cron: "*/50 * * * *" } // Evaluate triggers every 10 minutes
-    ],
-    async ({ step }) => {
-        const now = new Date();
 
-        // Find users with active automation and valid schedules
-        const preferences = await step.run("fetch-automated-users", async () => {
-            return await db.preference.findMany({
-                where: {
-                    automationLevel: { in: ['Full Auto', 'Semi-Auto'] },
-                    postingSchedule: { not: { equals: null } }
-                }
-            });
-        });
-
-        const results: any[] = [];
-
-        for (const pref of preferences) {
-            try {
-                // Parse schedule from JSON
-                const schedule = typeof pref.postingSchedule === 'string'
-                    ? JSON.parse(pref.postingSchedule)
-                    : pref.postingSchedule;
-
-                if (!Array.isArray(schedule) || schedule.length === 0) continue;
-
-                const isDue = isTriggerDue(schedule as any, (pref as any).timezone, now);
-                console.log(`[AutomationEngine] User ${pref.userId} schedule:`, schedule, "Timezone:", (pref as any).timezone, "IsDue:", isDue);
-                if (!isDue) continue;
-
-                await step.run(`process-trigger-${pref.userId}-${now.getTime()}`, async () => {
-                    // Determine next content type
-                    const nextContentType = await getNextContentType(pref.userId, pref.preferredContentTypes);
-
-                    // Generate dynamic content
-                    const topic = `A ${nextContentType} post about ${pref.industryNiche || 'my name (for personal brand)' || 'my industry'} for ${pref.brandName || 'my brand'} focusing on ${pref.contentGoals || 'growth'}`;
-                    const generatedContentText = await AIService.generateContent(
-                        pref.userId,
-                        topic,
-                        pref.audienceType || 'General public',
-                        'Professional'
-                    ) || `Here is some great ${nextContentType} content generated via our automation engine! #Automation`;
-
-                    // If Semi-Auto: Create in ContentQueue as pending/draft explicitly
-                    if (pref.automationLevel === 'Semi-Auto') {
-                        await db.contentQueue.create({
-                            data: {
-                                userId: pref.userId,
-                                source: 'automation',
-                                contentType: nextContentType,
-                                rawContent: generatedContentText,
-                                status: 'pending',
-                                title: `Auto-generated ${nextContentType} content`,
-                            }
-                        });
-                        results.push({ userId: pref.userId, action: 'queued_for_review' });
-                    }
-                    else if (pref.automationLevel === 'Full Auto') {
-                        // Create ScheduledPost directly and fast-track it for each preferred platform
-                        const platforms = pref.preferredPlatforms || [];
-                        for (const platform of platforms) {
-                            const socialAccount = await db.socialAccount.findFirst({
-                                where: { userId: pref.userId, platform, status: 'active' }
-                            });
-
-                            if (!socialAccount) continue;
-
-                            let contentId = null;
-                            if (platform === 'linkedin') {
-                                const liPost = await db.linkedInPost.create({
-                                    data: {
-                                        userId: pref.userId,
-                                        socialAccountId: socialAccount.id,
-                                        postType: 'TEXT',
-                                        description: generatedContentText,
-                                        targetType: 'Person',
-                                        visibility: 'PUBLIC',
-                                        status: 'PENDING',
-                                    }
-                                });
-                                contentId = liPost.id;
-                            }
-
-                            const post = await db.scheduledPost.create({
-                                data: {
-                                    userId: pref.userId,
-                                    socialAccountId: socialAccount.id,
-                                    platform,
-                                    postType: nextContentType.toUpperCase(),
-                                    contentText: generatedContentText,
-                                    targetType: 'Profile',
-                                    status: 'pending',
-                                    scheduledAt: new Date(), // Immediate
-                                    contentId
-                                }
-                            });
-
-                            const eventName = platform === 'linkedin' ? "linkedin/post.publish" : "app/post.publish_now";
-
-                            await inngest.send({
-                                name: eventName,
-                                data: {
-                                    postId: platform === 'linkedin' ? contentId : post.id,
-                                    scheduledPostId: post.id,
-                                    platform
-                                },
-                            });
-                        }
-                        results.push({ userId: pref.userId, action: 'dispatched_full_auto' });
-                    }
-                });
-            } catch (error) {
-                console.error(`Error processing automation for user ${pref.userId}:`, error);
-            }
-        }
-
-        return { processedUsers: preferences.length, triggersFired: results.length, details: results };
-    }
-);

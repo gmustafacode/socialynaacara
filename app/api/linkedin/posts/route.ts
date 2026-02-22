@@ -189,17 +189,30 @@ export async function POST(request: Request) {
             }
         });
 
-        // 7. IMMEDIATE TRIGGER: Bypass worker if not scheduled
+        // 7. DISPATCH TO INNGEST ENGINE
         let inngestResult = null;
         if (!isScheduled) {
-            console.log(`[LinkedIn API] Instant publish. Dispatching post ${post.id} to Inngest...`);
+            // IMMEDIATE: Publish right now via Inngest event
+            console.log(`[LinkedIn API] Instant publish. Dispatching post ${post.id} to Inngest...`)
             inngestResult = await inngest.send({
                 name: "linkedin/post.publish",
                 data: {
                     postId: post.id,
                     scheduledPostId: scheduledPost.id
                 }
-            });
+            })
+        } else {
+            // SCHEDULED: Fire immediately but Inngest will sleep until the scheduled time
+            // This is more reliable than polling cron — guaranteed precise delivery
+            console.log(`[LinkedIn API] Scheduled publish at ${scheduleTime.toISOString()}. Dispatching sleep-until event...`)
+            inngestResult = await inngest.send({
+                name: "linkedin/post.schedule",
+                data: {
+                    postId: post.id,
+                    scheduledPostId: scheduledPost.id,
+                    scheduledFor: scheduleTime.toISOString()
+                }
+            })
         }
 
         return NextResponse.json({
