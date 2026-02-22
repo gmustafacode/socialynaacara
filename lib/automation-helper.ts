@@ -44,11 +44,11 @@ export function isTriggerDue(triggers: ScheduleTrigger[], userTimezone?: string 
 
         const triggerTotalMinutes = tHours * 60 + tMinutes;
 
-        // ±2 minute fuzzy match
+        // ±5 minute fuzzy match (more resilient to cron/poll delays)
         const diff = Math.abs(currentTotalMinutes - triggerTotalMinutes);
 
         // Handle midnight wraparound
-        if (diff <= 2 || diff >= 1438) {
+        if (diff <= 5 || diff >= 1435) {
             return true;
         }
     }

@@ -138,7 +138,7 @@ export const schedulerPublisher = inngest.createFunction(
     async ({ event, step, runId }) => {
         const isImmediate = event.name === "linkedin/post.publish" || event.name === "app/post.publish_now";
         const isScheduledEvent = event.name === "linkedin/post.schedule" || event.name === "app/post.schedule";
-        const isCron = !event.name;
+        const isCron = !event.name || event.name === "inngest/scheduled.timer";
         const startTime = Date.now();
 
         // --- EXACT TIME SCHEDULED PUBLISHER (Sleep-Until) ---
@@ -251,7 +251,8 @@ export const schedulerPublisher = inngest.createFunction(
 
         // --- ENGINE TICK (CRON) ---
         if (isCron) {
-            const now = new Date();
+            const now = event.ts ? new Date(event.ts) : new Date();
+            console.log(`[Inngest] Engine Tick Started: ${now.toISOString()} (Event: ${event.name})`);
 
             // 1. AUTOMATION TRIGGER PHASE
             const automationResults = await step.run("automation-trigger-evaluation", async () => {
