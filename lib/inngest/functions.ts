@@ -21,7 +21,7 @@ import { NormalizedContent } from "../ingestion/types";
  * Routes tasks to appropriate engines.
  */
 export const masterOrchestrator = inngest.createFunction(
-    { id: "master-orchestrator", concurrency: 10 },
+    { id: "master-orchestrator", concurrency: 5 },
     [
         { event: "app/orchestrator.route" }
     ],
