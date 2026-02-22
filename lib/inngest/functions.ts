@@ -132,43 +132,81 @@ export const schedulerPublisher = inngest.createFunction(
         { event: "linkedin/post.publish" }, // Immediate Publisher (Legacy Support)
         { event: "app/post.publish_now" } // Immediate Publisher (Universal Support)
     ],
-    async ({ event, step }) => {
+    async ({ event, step, runId }) => {
         const isImmediate = !!event.name;
+        const startTime = Date.now();
 
         // --- IMMEDIATE PUBLISHER ---
         if (isImmediate) {
-            const { postId, scheduledPostId } = event.data;
-            if (!postId) return { error: "Missing postId" };
+            const { postId, scheduledPostId, platform } = event.data;
+            if (!postId && !scheduledPostId) return { error: "Missing ID" };
 
-            const post = await step.run("mark-processing", async () => {
-                const result = await db.linkedInPost.updateMany({
-                    where: { id: postId, status: { in: ['SCHEDULED', 'PENDING', 'DRAFT'] }, linkedinPostUrn: null },
-                    data: { status: 'PROCESSING' }
+            if (platform === 'linkedin' || event.name === 'linkedin/post.publish') {
+                const post = await step.run("mark-processing-li", async () => {
+                    const result = await db.linkedInPost.updateMany({
+                        where: { id: postId, status: { in: ['SCHEDULED', 'PENDING', 'DRAFT'] }, linkedinPostUrn: null },
+                        data: { status: 'PROCESSING' }
+                    });
+                    if (result.count === 0) return null;
+                    return await db.linkedInPost.findUnique({ where: { id: postId }, include: { socialAccount: true } });
                 });
-                if (result.count === 0) return null;
-                return await db.linkedInPost.findUnique({ where: { id: postId }, include: { socialAccount: true } });
-            });
 
-            if (!post) {
-                console.warn(`[Inngest] Skipping post ${postId} (Already processing or missing)`);
-                return { skipped: true };
-            }
+                if (!post) {
+                    console.warn(`[Inngest] Skipping LinkedIn post ${postId} (Already processing or missing)`);
+                    return { skipped: true };
+                }
 
-            const result = await step.run("publish-via-service", async () => {
-                return await LinkedInPostingService.publishPost(postId);
-            });
+                const result = await step.run("publish-via-li-service", async () => {
+                    return await LinkedInPostingService.publishPost(postId);
+                });
 
-            if (scheduledPostId) {
-                await step.run("sync-scheduled-post", async () => {
-                    const r = result as any;
-                    const externalId = r.results?.[0] || null;
-                    await db.scheduledPost.update({
-                        where: { id: scheduledPostId },
-                        data: { status: 'published', publishedAt: new Date(), externalPostId: externalId }
+                if (scheduledPostId) {
+                    await step.run("sync-scheduled-post", async () => {
+                        const r = result as any;
+                        const externalId = r.results?.[0] || null;
+                        await db.scheduledPost.update({
+                            where: { id: scheduledPostId },
+                            data: { status: 'published', publishedAt: new Date(), externalPostId: externalId }
+                        });
+                    });
+                }
+                return { success: true, ...result };
+            } else {
+                // UNIVERSAL PUBLISHER (Immediate)
+                const targetPostId = scheduledPostId || postId;
+                const post = await step.run("fetch-universal-post", async () => {
+                    return await db.scheduledPost.findUnique({
+                        where: { id: targetPostId },
+                        include: { socialAccount: true }
                     });
                 });
+
+                if (!post || post.status === 'published') return { skipped: true };
+
+                return await step.run("publish-universal-immediate", async () => {
+                    const accessToken = await getValidAccessToken(post.socialAccountId);
+                    const webhookUrl = process.env.N8N_PUBLISH_WEBHOOK_URL;
+                    if (!webhookUrl) throw new Error("Universal Publisher Webhook Missing");
+
+                    const resp = await fetch(webhookUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-webhook-secret': process.env.WEBHOOK_SECRET || '' },
+                        body: JSON.stringify({
+                            postId: post.id,
+                            accessToken,
+                            platform: post.platform.toLowerCase(),
+                            contentText: post.contentText,
+                            mediaUrl: post.mediaUrl,
+                            callbackUrl: `${getBaseUrl()}/api/posts/update-status`
+                        }),
+                        signal: AbortSignal.timeout(20000)
+                    });
+
+                    if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
+                    await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'published', publishedAt: new Date() } });
+                    return { success: true };
+                });
             }
-            return { success: true, ...result };
         }
 
         // --- SCHEDULER ENGINE (Cron Tick) ---
@@ -253,12 +291,12 @@ export const schedulerPublisher = inngest.createFunction(
             const finishedAt = new Date();
             await db.cronExecutionLog.create({
                 data: {
-                    startedAt: new Date(),
+                    startedAt: new Date(startTime),
                     finishedAt,
                     processed: duePosts.length,
                     published: publishedCount,
                     failed: failedCount,
-                    executionTimeMs: finishedAt.getTime() - new Date().getTime(),
+                    executionTimeMs: finishedAt.getTime() - startTime,
                     errorsCount: failedCount
                 }
             }).catch(() => { });
@@ -296,14 +334,11 @@ export const analyticsEngine = inngest.createFunction(
                 if (!post.engagementMetrics) continue;
                 try {
                     const metrics = typeof post.engagementMetrics === 'string' ? JSON.parse(post.engagementMetrics) : post.engagementMetrics;
-                    if (metrics.comments > 5) {
-                        const mockComments = [
-                            "This is an amazing insight!",
-                            "I totally disagree, this wouldn't work.",
-                            "Great post, thanks for sharing!",
-                            "Very helpful for my startup.",
-                            "Not entirely accurate, needs more context."
-                        ];
+                    if (metrics.comments > 0) {
+                        // Real-world implementation would fetch comments from the platform API here
+                        // For now, we process as a positive/negative learning based on metrics 
+                        // even without specific comment text, or we can use empty array.
+                        const mockComments: string[] = []; // In development/audit: keep it empty to prove system works with empty state
 
                         const originalContent = (await db.linkedInPost.findUnique({
                             where: { id: post.postId! },

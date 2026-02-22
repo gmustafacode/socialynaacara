@@ -2,15 +2,39 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Share2, BarChart3, Settings, Layers, Lock, Menu, X } from 'lucide-react';
+import { Home, Share2, BarChart3, Settings, Layers, Lock, Menu, X, User } from 'lucide-react';
 import { UserNav } from '@/components/UserNav';
 import { QuotaTracker } from '@/components/QuotaTracker';
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const pathname = usePathname();
+    const router = useRouter();
+    const { data: session, status } = useSession();
+
+    useEffect(() => {
+        if (status === 'authenticated' && pathname !== '/onboarding') {
+            checkOnboarding();
+        }
+    }, [status, pathname]);
+
+    const checkOnboarding = async () => {
+        try {
+            const res = await fetch(`/api/preferences/${(session?.user as any)?.id}`);
+            if (res.ok) {
+                const prefs = await res.json();
+                if (prefs && prefs.onboardingCompleted === false) {
+                    router.push('/onboarding');
+                }
+            }
+        } catch (e) {
+            console.error("Failed to check onboarding status");
+        }
+    };
 
     const navItems = [
         {
@@ -29,6 +53,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         },
         {
             section: 'Management', items: [
+                { href: '/dashboard/user-information', icon: User, label: 'User Information' },
                 { href: '/dashboard/connect', icon: Share2, label: 'Connect Platforms' },
                 { href: '/dashboard/queue', icon: Layers, label: 'Queue & History' },
                 { href: '/dashboard/settings', icon: Settings, label: 'Global Settings' },

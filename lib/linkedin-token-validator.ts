@@ -117,8 +117,34 @@ export async function validateLinkedInToken(accessToken: string): Promise<Linked
  * Tries OIDC first, falls back to legacy /v2/me.
  */
 export async function getLinkedInProfile(accessToken: string) {
-    // Try modern OIDC endpoint first
-    let profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
+    // Favor legacy /v2/me endpoint to get the alphanumeric ID (required for legacy URNs in ugcPosts)
+    // This aligns with user's Python logic using BASE_USER_INFO_URL
+    let profileRes = await fetch('https://api.linkedin.com/v2/me', {
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'X-Restli-Protocol-Version': '2.0.0'
+        },
+        signal: AbortSignal.timeout(15000)
+    });
+
+    if (profileRes.ok) {
+        const profile = await profileRes.json();
+        console.log('[LinkedIn] Profile fetched via Legacy /v2/me (Favored for ID stability)');
+        return {
+            id: profile.id,
+            email: null, // /v2/me doesn't return email
+            name: `${profile.localizedFirstName} ${profile.localizedLastName}`,
+            picture: null,
+            firstName: profile.localizedFirstName,
+            lastName: profile.localizedLastName,
+            source: 'legacy',
+            type: 'person',
+            suggestedUrnPrefix: 'urn:li:person:'
+        };
+    }
+
+    // Fallback to OIDC if legacy fails
+    profileRes = await fetch('https://api.linkedin.com/v2/userinfo', {
         headers: {
             'Authorization': `Bearer ${accessToken}`
         },
@@ -127,7 +153,7 @@ export async function getLinkedInProfile(accessToken: string) {
 
     if (profileRes.ok) {
         const profile = await profileRes.json();
-        console.log('[LinkedIn] Profile fetched via OIDC /v2/userinfo');
+        console.log('[LinkedIn] Profile fetched via OIDC /v2/userinfo (Fallback)');
         return {
             id: profile.sub,
             email: profile.email,
@@ -135,18 +161,11 @@ export async function getLinkedInProfile(accessToken: string) {
             picture: profile.picture,
             firstName: profile.given_name,
             lastName: profile.family_name,
-            source: 'oidc'
+            source: 'oidc',
+            type: 'person',
+            suggestedUrnPrefix: 'urn:li:person:'
         };
     }
-
-    // Fallback to legacy endpoint
-    profileRes = await fetch('https://api.linkedin.com/v2/me', {
-        headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'X-Restli-Protocol-Version': '2.0.0'
-        },
-        signal: AbortSignal.timeout(15000)
-    });
 
     if (!profileRes.ok) {
         let errorBody: any;
@@ -158,18 +177,7 @@ export async function getLinkedInProfile(accessToken: string) {
         throw new Error(`LinkedIn profile fetch failed: ${JSON.stringify(errorBody)}`);
     }
 
-    const profile = await profileRes.json();
-    console.log('[LinkedIn] Profile fetched via Legacy /v2/me');
-
-    return {
-        id: profile.id,
-        email: null, // /v2/me doesn't return email
-        name: `${profile.localizedFirstName} ${profile.localizedLastName}`,
-        picture: null,
-        firstName: profile.localizedFirstName,
-        lastName: profile.localizedLastName,
-        source: 'legacy'
-    };
+    return null as any; // Shoud not reach here
 }
 
 /**

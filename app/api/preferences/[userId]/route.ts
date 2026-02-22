@@ -35,25 +35,59 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
 
     try {
         const body = await request.json()
-        const { preferredContentTypes, postingSchedule, notificationsEnabled } = body
+        const {
+            preferredContentTypes,
+            postingSchedule,
+            notificationsEnabled,
+            brandName,
+            profileType,
+            audienceType,
+            industryNiche,
+            contentGoals,
+            preferredPlatforms,
+            postingFrequency,
+            automationLevel,
+            preferredPostingTimes,
+            onboardingCompleted
+        } = body
 
         const updated = await db.preference.upsert({
             where: { userId },
             update: {
-                preferredContentTypes: JSON.stringify(preferredContentTypes),
-                postingSchedule: JSON.stringify(postingSchedule),
-                notificationsEnabled
+                preferredContentTypes: preferredContentTypes,
+                postingSchedule: postingSchedule ? (typeof postingSchedule === 'string' ? JSON.parse(postingSchedule) : postingSchedule) : undefined,
+                notificationsEnabled,
+                brandName,
+                profileType,
+                audienceType,
+                industryNiche,
+                contentGoals,
+                preferredPlatforms,
+                postingFrequency,
+                automationLevel,
+                onboardingCompleted
             },
             create: {
                 userId,
-                preferredContentTypes: JSON.stringify(preferredContentTypes),
-                postingSchedule: JSON.stringify(postingSchedule),
-                notificationsEnabled
+                preferredContentTypes: preferredContentTypes || [],
+                postingSchedule: postingSchedule ? (typeof postingSchedule === 'string' ? JSON.parse(postingSchedule) : postingSchedule) : {},
+                notificationsEnabled: notificationsEnabled ?? true,
+                brandName,
+                profileType,
+                audienceType,
+                industryNiche,
+                contentGoals,
+                preferredPlatforms: preferredPlatforms || [],
+                postingFrequency,
+                automationLevel,
+                onboardingCompleted: onboardingCompleted ?? false
             }
         })
 
         return NextResponse.json(updated)
     } catch (e) {
+        console.error("Error updating preferences:", e)
         return NextResponse.json({ error: "Error updating preferences" }, { status: 500 })
     }
 }
+

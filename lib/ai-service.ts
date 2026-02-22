@@ -1,4 +1,6 @@
 import db from './db';
+import { intelligenceGraph } from './ai/intelligence/graph';
+import { safeParseJson } from './utils/json-parser';
 
 export interface AIAnalysisResult {
     category: "technology" | "startup" | "ai" | "business" | "marketing" | "other";
@@ -53,49 +55,42 @@ export class AIService {
 
             console.log(`[AI-Service] Processing ${pendingItems.length} items...`);
 
-            for (const item of pendingItems) {
+            // 2. Process items in parallel (limited by batchSize)
+            const results = await Promise.all(pendingItems.map(async (item) => {
                 try {
-                    // 2. Validate & Clean
                     const cleanedContent = this.cleanContent(item.rawContent || item.summary || "");
-
                     if (cleanedContent.length < 50) {
                         await this.saveRejection(item.id, "Validation Failed: Too short (<50 chars)");
-                        stats.rejected++;
-                        continue;
+                        return 'rejected';
                     }
 
-                    // 3. AI Analysis (with dynamic feedback loop learning)
                     const analysis = await this.analyzeWithAI(cleanedContent, item.userId);
-                    if (!analysis) {
-                        stats.ai_errors++;
-                        continue;
-                    }
+                    if (!analysis) return 'ai_error';
 
-                    // 4. Scoring & Decision
                     const finalScore = this.calculateFinalScore(analysis);
                     const { decision, reason } = this.makeDecision(finalScore, analysis);
 
-                    // 5. Save Results
                     await this.saveAnalysisResults(item.id, analysis, finalScore, decision, reason);
-
-                    // Update Stats
-                    stats.processed++;
-                    if (decision === 'approved') stats.approved++;
-                    else if (decision === 'review') stats.review++;
-                    else if (decision === 'rejected') stats.rejected++;
+                    return decision;
 
                 } catch (error) {
                     console.error(`[AI-Service] Error processing item ${item.id}:`, error);
-                    stats.ai_errors++;
                     await db.contentQueue.update({
                         where: { id: item.id },
-                        data: {
-                            aiStatus: 'ai_error',
-                            decisionReason: String(error)
-                        }
+                        data: { aiStatus: 'ai_error', decisionReason: String(error) }
                     }).catch(() => { });
+                    return 'ai_error';
                 }
-            }
+            }));
+
+            // 3. Update Stats
+            results.forEach(status => {
+                stats.processed++;
+                if (status === 'approved') stats.approved++;
+                else if (status === 'review') stats.review++;
+                else if (status === 'rejected') stats.rejected++;
+                else if (status === 'ai_error') stats.ai_errors++;
+            });
 
             // 6. Log Execution
             const finishedAt = new Date();
@@ -192,7 +187,7 @@ export class AIService {
 
             const data = await response.json();
             const resultText = data.choices[0].message.content;
-            return JSON.parse(resultText) as AIAnalysisResult;
+            return safeParseJson<AIAnalysisResult | null>(resultText, null);
 
         } catch (error) {
             console.error("[AI-Service] LLM Call failed:", error);
@@ -345,7 +340,7 @@ export class AIService {
 
             const data = await response.json();
             const resultText = data.choices[0].message.content;
-            const parsed = JSON.parse(resultText);
+            const parsed = safeParseJson(resultText, { sentiment_score: 50, category: 'neutral', key_learnings: '' });
 
             // Save the extracted intelligence to the database
             await db.aiLearningExample.create({
@@ -367,6 +362,7 @@ export class AIService {
             return false;
         }
     }
+
     /**
      * Generation Engine for the Smart Composer
      */
@@ -473,7 +469,7 @@ export class AIService {
 
             if (!response.ok) throw new Error("API Error");
             const data = await response.json();
-            const parsed = JSON.parse(data.choices[0].message.content);
+            const parsed = safeParseJson(data.choices[0].message.content, { isSafe: true, flags: [], optimizedText: content });
 
             return {
                 isSafe: parsed.isSafe,
@@ -483,6 +479,75 @@ export class AIService {
         } catch (e) {
             console.error("[AI-Service] Moderation Failed:", e);
             throw new Error("Failed to run moderation check.");
+        }
+    }
+
+    /**
+     * Executes the LangGraph Intelligence Layer for a given topic
+     */
+    static async runIntelligenceLayer(userId: string, topic: string, audienceOverride?: string, toneOverride?: string) {
+        // 1. Fetch User Profile & Preferences
+        const prefs = await db.preference.findUnique({ where: { userId } });
+
+        // 2. Fetch Memory (Past 10 performance learnings)
+        const pastLearnings = await db.aiLearningExample.findMany({
+            where: { userId },
+            orderBy: { createdAt: 'desc' },
+            take: 10
+        });
+        const memory = pastLearnings.map(l => `[${l.sentimentScore > 50 ? 'SUCCESS' : 'FAILURE'}] ${l.keyLearnings}`);
+
+        // 3. Initialize & Run Graph
+        const initialState = {
+            userId,
+            topic,
+            audience: audienceOverride || prefs?.audienceType || "General",
+            tone: toneOverride || "Professional",
+            memory,
+            context: "",
+            rawContent: "",
+            platformContent: {},
+            safetyStatus: { isSafe: true, flags: [] },
+            analytics: {},
+            feedbackPrompt: "",
+            nextAction: "search" as const
+        };
+
+        try {
+            console.log(`[AI-Service] Invoking Intelligence Graph...`);
+            const result = await intelligenceGraph.invoke(initialState);
+            console.log(`[AI-Service] Intelligence Graph completed successfully.`);
+
+            // 4. Persistence: If safe, log the intelligence cycle
+            if (result.safetyStatus?.isSafe) {
+                await db.aiLog.create({
+                    data: {
+                        userId,
+                        agentName: "Socialyncara-Intelligence-Layer",
+                        action: "full_cycle",
+                        outputSummary: `Generated content across ${Object.keys(result.platformContent || {}).length} platforms. Feedback: ${result.feedbackPrompt?.substring(0, 100) || "none"}...`
+                    }
+                }).catch(e => console.error("[AI-Service] Failed to create AI log:", e));
+
+                // Save learnings as a new example if analytics are good
+                if (result.analytics?.engagementEstimate && result.analytics.engagementEstimate > 70) {
+                    await db.aiLearningExample.create({
+                        data: {
+                            userId,
+                            postId: "intelligence-loop-" + Date.now(),
+                            contentText: result.rawContent?.substring(0, 500) || "",
+                            sentimentScore: result.analytics.engagementEstimate,
+                            category: result.analytics.sentimentEstimate || "positive",
+                            keyLearnings: result.feedbackPrompt || ""
+                        }
+                    }).catch(e => console.error("[AI-Service] Failed to create learning example:", e));
+                }
+            }
+
+            return result;
+        } catch (error: any) {
+            console.error("[AI-Service] LangGraph Intelligence Layer FAILED:", error);
+            throw error;
         }
     }
 }

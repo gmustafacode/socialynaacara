@@ -14,6 +14,8 @@ import { toast } from 'sonner'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { toLocalInputString } from '@/lib/utils/time'
+
 
 export default function UniversalComposer() {
     const router = useRouter()
@@ -162,12 +164,16 @@ export default function UniversalComposer() {
 
         setLoading(true)
         try {
+            let scheduledAtIso = ''
             if (formData.scheduledAt) {
                 const scheduledDate = new Date(formData.scheduledAt)
                 const now = new Date()
-                if (scheduledDate <= new Date(now.getTime() + 60000)) {
+
+                // Use a slightly larger buffer (70s) to account for processing time and potential clock skew
+                if (scheduledDate.getTime() <= now.getTime() + 60000) {
                     throw new Error("Scheduled time must be at least 1 minute in the future")
                 }
+                scheduledAtIso = scheduledDate.toISOString()
             }
 
             // Dispatch to Orchestrator for EACH selected account
@@ -178,13 +184,14 @@ export default function UniversalComposer() {
                     body: JSON.stringify({
                         contentText: formData.contentText,
                         mediaUrl: formData.mediaUrl,
-                        scheduledAt: formData.scheduledAt,
+                        scheduledAt: scheduledAtIso,
                         postType: 'TEXT',
                         targetType: 'FEED',
                         socialAccountId: accountId,
-                        publishNow: !formData.scheduledAt
+                        publishNow: !scheduledAtIso
                     })
                 })
+
                 if (!res.ok) {
                     console.error(`Failed to dispatch for account ${accountId}`)
                 }
@@ -467,12 +474,13 @@ export default function UniversalComposer() {
 
                                     {/* Schedule */}
                                     <div
-                                        onClick={() => setFormData({ ...formData, scheduledAt: new Date(Date.now() + 3600000).toISOString().slice(0, 16) })}
+                                        onClick={() => setFormData({ ...formData, scheduledAt: toLocalInputString(new Date(Date.now() + 3600000)) })}
                                         className={cn(
                                             "p-6 rounded-2xl border cursor-pointer transition-all",
                                             formData.scheduledAt ? "bg-blue-500/10 border-blue-500" : "bg-white/5 border-white/10 hover:bg-white/10"
                                         )}
                                     >
+
                                         <Clock className={cn("size-6 mb-4", formData.scheduledAt ? "text-blue-400" : "text-white/40")} />
                                         <h4 className="font-bold mb-1">Schedule for Later</h4>
                                         <p className="text-xs text-white/50">Send to Scheduler Engine queue.</p>

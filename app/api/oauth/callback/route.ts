@@ -187,12 +187,16 @@ export async function GET(request: Request) {
             const { getLinkedInProfile } = await import('@/lib/linkedin-token-validator');
             const profile = await getLinkedInProfile(tokens.access_token);
 
-            platformAccountId = profile.id;
+            // Use full URN for platformAccountId if available, otherwise construct it
+            platformAccountId = profile.id.startsWith('urn:li:')
+                ? profile.id
+                : `${(profile as any).suggestedUrnPrefix || 'urn:li:person:'}${profile.id}`;
+
             metadata = {
                 username: profile.email || profile.name,
                 name: profile.name,
                 picture: profile.picture,
-                type: 'linkedin',
+                type: 'person', // These endpoints are for personal profiles
                 firstName: profile.firstName,
                 lastName: profile.lastName,
                 source: profile.source

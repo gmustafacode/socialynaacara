@@ -102,8 +102,17 @@ model SocialAccount {
 model Preference {
   id                    String   @id @default(uuid())
   userId                String   @unique
-  preferredContentTypes String?
-  postingSchedule       String?
+  brandName             String?
+  profileType           String?  // Personal, Business, Creator
+  audienceType          String?
+  industryNiche         String?
+  contentGoals          String?
+  preferredPlatforms    String[] @default([])
+  preferredContentTypes String[] @default([])
+  postingSchedule       Json?    // Using Json for more flexible schedule storage
+  postingFrequency      String?
+  automationLevel       String?  // Manual, Semi-Auto, Full Auto
+  onboardingCompleted   Boolean  @default(false)
   notificationsEnabled  Boolean  @default(true)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -112,30 +121,31 @@ model Preference {
   @@map("preferences")
 }
 
+
 model ContentQueue {
-  id          String        @id @default(uuid())
-  userId      String?       @map("user_id")
-  source      String
-  contentType String        @map("content_type")
-  title       String?
-  summary     String?
-  rawContent  String?       @map("raw_content")
-  mediaUrl    String?       @map("media_url")
-  sourceUrl   String?       @unique @map("source_url")
-  author      String?
-  language    String        @default("en")
-  status      String        @default("pending")
-  viralScore  Int           @default(0) @map("viral_score")
-  metadata    Json?
-  publishedAt DateTime?     @map("published_at")
-  fetchedAt   DateTime      @default(now()) @map("fetched_at")
-  scheduledAt DateTime?     @map("scheduled_at")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
-  aiStatus       String?            @map("ai_status")
+  id             String             @id @default(uuid())
+  userId         String?            @map("user_id")
+  source         String
+  contentType    String             @map("content_type")
+  title          String?
+  summary        String?
+  rawContent     String?            @map("raw_content")
+  mediaUrl       String?            @map("media_url")
+  sourceUrl      String?            @unique @map("source_url")
+  language       String             @default("en")
+  status         String             @default("pending")
+  viralScore     Int                @default(0) @map("viral_score")
+  fetchedAt      DateTime           @default(now()) @map("fetched_at")
+  scheduledAt    DateTime?          @map("scheduled_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  author         String?
+  metadata       Json?
+  publishedAt    DateTime?          @map("published_at")
   finalScore     Float?             @map("final_score")
   decisionReason String?            @map("decision_reason")
   analyzedAt     DateTime?          @map("analyzed_at")
+  aiStatus       String?            @map("ai_status")
   aiAnalysis     ContentAiAnalysis?
   user           User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
   postHistory    PostHistory[]
@@ -187,16 +197,15 @@ model ScheduledPost {
   targetType      String
   targetId        String?
   scheduledAt     DateTime?
-  timezone        String?
   status          String        @default("pending")
+  externalPostId  String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  timezone        String?
   retryCount      Int           @default(0) @map("retry_count")
   lastError       String?       @map("last_error")
   publishedAt     DateTime?     @map("published_at")
-  externalPostId  String?
   contentId       String?       @map("content_id")
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  
   socialAccount   SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -207,19 +216,18 @@ model ScheduledPost {
 }
 
 model CronExecutionLog {
-  id               String    @id @default(uuid())
-  startedAt        DateTime  @map("started_at")
-  finishedAt       DateTime? @map("finished_at")
-  processed        Int       @default(0)
-  published        Int       @default(0)
-  failed           Int       @default(0)
-  executionTimeMs  Int?      @map("execution_time_ms")
-  errorsCount      Int       @default(0) @map("errors_count")
-  createdAt        DateTime  @default(now()) @map("created_at")
+  id              String    @id @default(uuid())
+  startedAt       DateTime  @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  processed       Int       @default(0)
+  published       Int       @default(0)
+  failed          Int       @default(0)
+  executionTimeMs Int?      @map("execution_time_ms")
+  errorsCount     Int       @default(0) @map("errors_count")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
   @@map("cron_execution_logs")
 }
-
 
 model LinkedInPost {
   id                    String        @id @default(uuid())
@@ -269,20 +277,20 @@ model IngestionLog {
 }
 
 model ContentAiAnalysis {
-  id                    String        @id @default(uuid())
-  contentId             String        @unique @map("content_id")
-  category              String
-  contentQualityScore   Int           @map("content_quality_score")
-  engagementScore       Int           @map("engagement_score")
-  viralityProbability   Int           @map("virality_probability")
-  finalScore            Float         @map("final_score")
-  recommendedPlatforms  Json          @map("recommended_platforms")
-  contentTypeRecommendation String    @map("content_type_recommendation")
-  rewriteNeeded         Boolean       @map("rewrite_needed")
-  reasoning             String
-  rawLlmResponse        Json          @map("raw_llm_response")
-  createdAt             DateTime      @default(now()) @map("created_at")
-  content               ContentQueue  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  id                        String       @id @default(uuid())
+  contentId                 String       @unique @map("content_id")
+  category                  String
+  contentQualityScore       Int          @map("content_quality_score")
+  engagementScore           Int          @map("engagement_score")
+  viralityProbability       Int          @map("virality_probability")
+  finalScore                Float        @map("final_score")
+  recommendedPlatforms      Json         @map("recommended_platforms")
+  contentTypeRecommendation String       @map("content_type_recommendation")
+  rewriteNeeded             Boolean      @map("rewrite_needed")
+  reasoning                 String
+  rawLlmResponse            Json         @map("raw_llm_response")
+  createdAt                 DateTime     @default(now()) @map("created_at")
+  content                   ContentQueue @relation(fields: [contentId], references: [id], onDelete: Cascade)
 
   @@index([contentId])
   @@map("content_ai_analysis")
@@ -306,16 +314,17 @@ model AiProcessingLog {
 }
 
 model AiLearningExample {
-  id              String   @id @default(uuid())
-  userId          String   @map("user_id")
-  postId          String   @map("post_id")
-  contentText     String   @map("content_text")
-  sentimentScore  Int      @map("sentiment_score")
-  category        String
-  keyLearnings    String   @map("key_learnings")
-  createdAt       DateTime @default(now()) @map("created_at")
+  id             String   @id @default(uuid())
+  userId         String   @map("user_id")
+  postId         String   @map("post_id")
+  contentText    String   @map("content_text")
+  sentimentScore Int      @map("sentiment_score")
+  category       String
+  keyLearnings   String   @map("key_learnings")
+  createdAt      DateTime @default(now()) @map("created_at")
 
   @@index([userId])
   @@index([category])
+  @@index([sentimentScore])
   @@map("ai_learning_examples")
 }
