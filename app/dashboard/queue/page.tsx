@@ -16,7 +16,8 @@ import {
     Search,
     History,
     MoreHorizontal,
-    Trash2
+    Trash2,
+    Wand2
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -209,7 +210,29 @@ export default function QueuePage() {
                                                 <span className="text-[10px] font-black text-white/20 uppercase tracking-widest">Viral Score</span>
                                                 <span className="text-sm font-black text-purple-400">{item.viralScore}%</span>
                                             </div>
-                                            <Link href={`/dashboard/linkedin/post?title=${encodeURIComponent(item.title || '')}&description=${encodeURIComponent(item.summary || '')}&mediaUrl=${encodeURIComponent(item.mediaUrl || '')}`}>
+
+                                            <Button
+                                                className="rounded-xl bg-purple-600 hover:bg-purple-500 font-bold px-4"
+                                                onClick={async () => {
+                                                    try {
+                                                        const res = await fetch(`/api/content/${item.id}/approve`, { method: 'POST' });
+                                                        const data = await res.json();
+                                                        if (res.ok) {
+                                                            toast.success(data.message || "Approved & Scheduled successfully!");
+                                                            fetchData();
+                                                        } else {
+                                                            toast.error(data.error || "Failed to schedule");
+                                                        }
+                                                    } catch (e) {
+                                                        toast.error("Connection error");
+                                                    }
+                                                }}
+                                                title="Approve & Schedule Automatically"
+                                            >
+                                                <Wand2 className="size-4 mr-2" /> Auto Schedule
+                                            </Button>
+
+                                            <Link href={`/dashboard/linkedin/post?title=${encodeURIComponent(item.title || '')}&description=${encodeURIComponent(item.summary || '')}&mediaUrl=${encodeURIComponent(item.mediaUrl || '')}`} title="Edit Manually in Composer">
                                                 <Button className="rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 size-12 p-0">
                                                     <Send className="size-4" />
                                                 </Button>
@@ -217,6 +240,7 @@ export default function QueuePage() {
                                             <Button
                                                 variant="ghost"
                                                 className="rounded-xl border border-white/10 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400 size-12 p-0 transition-colors"
+                                                title="Discard"
                                                 onClick={async () => {
                                                     if (!confirm("Discard this intelligence?")) return;
                                                     try {

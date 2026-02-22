@@ -68,10 +68,15 @@ export const PostStatusSchema = z.enum(["PENDING", "PROCESSING", "PUBLISHED", "F
  */
 export const PostCreateSchema = z.object({
     socialAccountId: z.string().uuid(),
-    postType: z.enum(["ARTICLE", "IMAGE", "VIDEO", "POLL", "CAROUSEL"]).default("ARTICLE"),
+    postType: z.enum([
+        "ARTICLE", "IMAGE", "VIDEO", "POLL", "CAROUSEL",
+        // Additional types used by LinkedIn Composer and Universal Composer
+        "TEXT", "TEXT_ONLY", "IMAGE_TEXT", "VIDEO_TEXT", "GROUP", "GROUP_POST"
+    ]).default("TEXT"),
     contentText: z.string().min(1).max(3000),
     mediaUrl: z.string().url().optional().nullable(),
     targetType: z.enum(["FEED", "GROUP", "STORY"]).optional().default("FEED"),
     targetId: z.string().optional().nullable(),
     scheduledAt: z.string().datetime().optional().nullable(),
+    publishNow: z.boolean().optional().default(false),
 });

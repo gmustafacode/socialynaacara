@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { Loader2, User, Building2, Sparkles, Target, Zap, Clock, ShieldCheck, Share2, ImageIcon, Video, AlignLeft, Layout, Users, Globe, Save, RotateCcw, Check } from "lucide-react"
+import { Loader2, User, Building2, Sparkles, Target, Zap, Clock, ShieldCheck, Share2, ImageIcon, Video, AlignLeft, Layout, Users, Globe, Save, RotateCcw, Check, Plus, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -52,7 +52,13 @@ export default function UserInformationPage() {
         } catch (error) {
             toast.error("Failed to fetch profile info")
         } finally {
-            setLoading(false)
+            // Auto-detect timezone if not present or just to be sure we have the latest
+            const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            setFormData((prev: any) => ({
+                ...prev,
+                timezone: prev?.timezone || detectedTz
+            }));
+            setLoading(false);
         }
     }
 
@@ -278,12 +284,62 @@ export default function UserInformationPage() {
                             </div>
                         </div>
                         <div className="grid gap-2">
-                            <Label>Preferred Time</Label>
-                            <Input
-                                value={typeof formData?.preferredPostingTimes === 'object' ? formData.preferredPostingTimes.time : formData?.preferredPostingTimes}
-                                onChange={e => setFormData({ ...formData, preferredPostingTimes: { time: e.target.value } })}
-                                className="bg-white/5 border-white/10"
-                            />
+                            <div className="flex items-center justify-between">
+                                <Label>Posting Schedule Triggers</Label>
+                                <Button type="button" variant="outline" size="sm" onClick={() => {
+                                    const current = Array.isArray(formData?.postingSchedule) ? formData.postingSchedule : [];
+                                    setFormData({ ...formData, postingSchedule: [...current, { day: 'Everyday', time: '12:00' }] });
+                                }} className="h-7 text-xs border-white/10 bg-white/5">
+                                    <Plus className="size-3 mr-1" /> Add Trigger
+                                </Button>
+                            </div>
+                            <div className="space-y-2">
+                                {(Array.isArray(formData?.postingSchedule) ? formData.postingSchedule : []).map((schedule: any, i: number) => (
+                                    <div key={i} className="flex gap-2 items-center">
+                                        <select
+                                            value={schedule.day}
+                                            onChange={(e) => {
+                                                const current = [...formData.postingSchedule];
+                                                current[i].day = e.target.value;
+                                                setFormData({ ...formData, postingSchedule: current });
+                                            }}
+                                            className="flex h-10 w-full items-center justify-between rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            {["Everyday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => (
+                                                <option key={day} value={day} className="bg-neutral-900 text-white">{day}</option>
+                                            ))}
+                                        </select>
+                                        <Input
+                                            type="time"
+                                            value={schedule.time}
+                                            onChange={(e) => {
+                                                const current = [...formData.postingSchedule];
+                                                current[i].time = e.target.value;
+                                                setFormData({ ...formData, postingSchedule: current });
+                                            }}
+                                            className="bg-white/5 border-white/10 w-32"
+                                        />
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => {
+                                                const current = [...formData.postingSchedule];
+                                                current.splice(i, 1);
+                                                setFormData({ ...formData, postingSchedule: current });
+                                            }}
+                                            className="text-white/40 hover:text-red-400 hover:bg-red-400/10"
+                                        >
+                                            <Trash2 className="size-4" />
+                                        </Button>
+                                    </div>
+                                ))}
+                                {(!Array.isArray(formData?.postingSchedule) || formData.postingSchedule.length === 0) && (
+                                    <p className="text-xs text-white/40 text-center py-2 border border-dashed border-white/10 rounded-md">
+                                        No triggers set. Click 'Add Trigger' to schedule posts.
+                                    </p>
+                                )}
+                            </div>
                         </div>
                     </CardContent>
                 </Card>

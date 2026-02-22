@@ -48,7 +48,8 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
             postingFrequency,
             automationLevel,
             preferredPostingTimes,
-            onboardingCompleted
+            onboardingCompleted,
+            timezone
         } = body
 
         const updated = await db.preference.upsert({
@@ -65,7 +66,8 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
                 preferredPlatforms,
                 postingFrequency,
                 automationLevel,
-                onboardingCompleted
+                onboardingCompleted,
+                timezone
             },
             create: {
                 userId,
@@ -80,7 +82,8 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
                 preferredPlatforms: preferredPlatforms || [],
                 postingFrequency,
                 automationLevel,
-                onboardingCompleted: onboardingCompleted ?? false
+                onboardingCompleted: onboardingCompleted ?? false,
+                timezone
             }
         })
 

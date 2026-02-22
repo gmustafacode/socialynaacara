@@ -141,8 +141,8 @@ export async function getLinkedInProfile(accessToken: string) {
         };
     }
 
-    // Fallback to legacy endpoint
-    profileRes = await fetch('https://api.linkedin.com/v2/me', {
+    // Fallback to legacy endpoint with exact projection for picture
+    profileRes = await fetch('https://api.linkedin.com/v2/me?projection=(id,localizedFirstName,localizedLastName,profilePicture(displayImage~:playableStreams))', {
         headers: {
             'Authorization': `Bearer ${accessToken}`,
             'X-Restli-Protocol-Version': '2.0.0'
@@ -163,13 +163,30 @@ export async function getLinkedInProfile(accessToken: string) {
     const profile = await profileRes.json();
     console.log('[LinkedIn] Profile fetched via Legacy /v2/me');
 
+    const fName = profile.localizedFirstName || '';
+    const lName = profile.localizedLastName || '';
+    const fullName = `${fName} ${lName}`.trim() || 'LinkedIn User';
+
+    // Parse the heavily nested playableStreams for the profile picture
+    let pictureUrl = null;
+    try {
+        const streams = profile.profilePicture?.['displayImage~']?.elements;
+        if (streams && streams.length > 0) {
+            // Get the largest image representation (usually the last in the array)
+            const largestStream = streams[streams.length - 1];
+            pictureUrl = largestStream?.identifiers?.[0]?.identifier || null;
+        }
+    } catch (e) {
+        console.warn("[LinkedIn] Failed to parse legacy profile picture", e);
+    }
+
     return {
         id: profile.id,
         email: null, // /v2/me doesn't return email
-        name: `${profile.localizedFirstName} ${profile.localizedLastName}`,
-        picture: null,
-        firstName: profile.localizedFirstName,
-        lastName: profile.localizedLastName,
+        name: fullName,
+        picture: pictureUrl,
+        firstName: fName,
+        lastName: lName,
         source: 'legacy',
         type: 'person',
         suggestedUrnPrefix: 'urn:li:person:'

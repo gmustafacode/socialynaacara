@@ -1,4 +1,5 @@
 import { inngest } from "./client";
+import { isTriggerDue, getNextContentType } from "../automation-helper";
 import db from "../db";
 import { LinkedInPostingService } from "../linkedin-posting-service";
 import { checkPostingLimits } from "../limits";
@@ -128,13 +129,51 @@ export const contentEngine = inngest.createFunction(
 export const schedulerPublisher = inngest.createFunction(
     { id: "scheduler-publisher", concurrency: 5 },
     [
-        { cron: "*/1 * * * *" }, // Scheduler Engine Tick
+        { cron: "*/50 * * * *" }, // Scheduler Engine Tick
         { event: "linkedin/post.publish" }, // Immediate Publisher (Legacy Support)
-        { event: "app/post.publish_now" } // Immediate Publisher (Universal Support)
+        { event: "app/post.publish_now" }, // Immediate Publisher (Universal Support)
+        { event: "linkedin/post.schedule" }, // sleep-until precise delivery
+        { event: "app/post.schedule" } // sleep-until precise delivery
     ],
     async ({ event, step, runId }) => {
-        const isImmediate = !!event.name;
+        const isImmediate = event.name === "linkedin/post.publish" || event.name === "app/post.publish_now";
+        const isScheduledEvent = event.name === "linkedin/post.schedule" || event.name === "app/post.schedule";
         const startTime = Date.now();
+
+        // --- EXACT TIME SCHEDULED PUBLISHER (Sleep-Until) ---
+        if (isScheduledEvent) {
+            const { scheduledPostId, scheduledFor } = event.data;
+            if (!scheduledPostId || !scheduledFor) return { error: "Missing scheduledPostId or scheduledFor timestamp" };
+
+            // 1. Sleep until the exact scheduled time
+            await step.sleepUntil("wait-until-scheduled-time", new Date(scheduledFor));
+
+            // 2. Verify post is still valid
+            const post = await step.run("verify-post-before-publish", async () => {
+                return await db.scheduledPost.findUnique({
+                    where: { id: scheduledPostId },
+                    select: { id: true, status: true, contentId: true, platform: true }
+                });
+            });
+
+            if (!post) return { skipped: true, reason: "Post no longer exists" };
+            if (post.status !== 'pending') return { skipped: true, reason: `Post status is ${post.status}, expected pending` };
+
+            // 3. Fast-track to the immediate publisher 
+            await step.run("dispatch-immediate-publish", async () => {
+                const eventName = post.platform === 'linkedin' ? "linkedin/post.publish" : "app/post.publish_now";
+                await inngest.send({
+                    name: eventName,
+                    data: {
+                        postId: post.platform === 'linkedin' ? post.contentId : post.id,
+                        scheduledPostId: post.id,
+                        platform: post.platform
+                    }
+                });
+            });
+
+            return { success: true, message: "Woke up and dispatched to immediate publisher", scheduledPostId };
+        }
 
         // --- IMMEDIATE PUBLISHER ---
         if (isImmediate) {
@@ -421,5 +460,134 @@ export const systemUtilities = inngest.createFunction(
         });
 
         return { success: true, message: "System cleanup complete" };
+    }
+);
+
+/**
+ * =========================================================================
+ * 🟠 FUNCTION 6 — AUTOMATION TRIGGER ENGINE
+ * ============================================================================
+ * Purpose: Evaluates user posting schedules and generates content based on sequence.
+ */
+export const automationEngine = inngest.createFunction(
+    { id: "automation-engine", concurrency: 1 },
+    [
+        { cron: "*/50 * * * *" } // Evaluate triggers every 10 minutes
+    ],
+    async ({ step }) => {
+        const now = new Date();
+
+        // Find users with active automation and valid schedules
+        const preferences = await step.run("fetch-automated-users", async () => {
+            return await db.preference.findMany({
+                where: {
+                    automationLevel: { in: ['Full Auto', 'Semi-Auto'] },
+                    postingSchedule: { not: { equals: null } }
+                }
+            });
+        });
+
+        const results: any[] = [];
+
+        for (const pref of preferences) {
+            try {
+                // Parse schedule from JSON
+                const schedule = typeof pref.postingSchedule === 'string'
+                    ? JSON.parse(pref.postingSchedule)
+                    : pref.postingSchedule;
+
+                if (!Array.isArray(schedule) || schedule.length === 0) continue;
+
+                const isDue = isTriggerDue(schedule as any, (pref as any).timezone, now);
+                console.log(`[AutomationEngine] User ${pref.userId} schedule:`, schedule, "Timezone:", (pref as any).timezone, "IsDue:", isDue);
+                if (!isDue) continue;
+
+                await step.run(`process-trigger-${pref.userId}-${now.getTime()}`, async () => {
+                    // Determine next content type
+                    const nextContentType = await getNextContentType(pref.userId, pref.preferredContentTypes);
+
+                    // Generate dynamic content
+                    const topic = `A ${nextContentType} post about ${pref.industryNiche || 'my name (for personal brand)' || 'my industry'} for ${pref.brandName || 'my brand'} focusing on ${pref.contentGoals || 'growth'}`;
+                    const generatedContentText = await AIService.generateContent(
+                        pref.userId,
+                        topic,
+                        pref.audienceType || 'General public',
+                        'Professional'
+                    ) || `Here is some great ${nextContentType} content generated via our automation engine! #Automation`;
+
+                    // If Semi-Auto: Create in ContentQueue as pending/draft explicitly
+                    if (pref.automationLevel === 'Semi-Auto') {
+                        await db.contentQueue.create({
+                            data: {
+                                userId: pref.userId,
+                                source: 'automation',
+                                contentType: nextContentType,
+                                rawContent: generatedContentText,
+                                status: 'pending',
+                                title: `Auto-generated ${nextContentType} content`,
+                            }
+                        });
+                        results.push({ userId: pref.userId, action: 'queued_for_review' });
+                    }
+                    else if (pref.automationLevel === 'Full Auto') {
+                        // Create ScheduledPost directly and fast-track it for each preferred platform
+                        const platforms = pref.preferredPlatforms || [];
+                        for (const platform of platforms) {
+                            const socialAccount = await db.socialAccount.findFirst({
+                                where: { userId: pref.userId, platform, status: 'active' }
+                            });
+
+                            if (!socialAccount) continue;
+
+                            let contentId = null;
+                            if (platform === 'linkedin') {
+                                const liPost = await db.linkedInPost.create({
+                                    data: {
+                                        userId: pref.userId,
+                                        socialAccountId: socialAccount.id,
+                                        postType: 'TEXT',
+                                        description: generatedContentText,
+                                        targetType: 'Person',
+                                        visibility: 'PUBLIC',
+                                        status: 'PENDING',
+                                    }
+                                });
+                                contentId = liPost.id;
+                            }
+
+                            const post = await db.scheduledPost.create({
+                                data: {
+                                    userId: pref.userId,
+                                    socialAccountId: socialAccount.id,
+                                    platform,
+                                    postType: nextContentType.toUpperCase(),
+                                    contentText: generatedContentText,
+                                    targetType: 'Profile',
+                                    status: 'pending',
+                                    scheduledAt: new Date(), // Immediate
+                                    contentId
+                                }
+                            });
+
+                            const eventName = platform === 'linkedin' ? "linkedin/post.publish" : "app/post.publish_now";
+
+                            await inngest.send({
+                                name: eventName,
+                                data: {
+                                    postId: platform === 'linkedin' ? contentId : post.id,
+                                    scheduledPostId: post.id,
+                                    platform
+                                },
+                            });
+                        }
+                        results.push({ userId: pref.userId, action: 'dispatched_full_auto' });
+                    }
+                });
+            } catch (error) {
+                console.error(`Error processing automation for user ${pref.userId}:`, error);
+            }
+        }
+
+        return { processedUsers: preferences.length, triggersFired: results.length, details: results };
     }
 );

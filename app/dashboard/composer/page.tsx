@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import {
     Send, Globe, Layout, Type, Image as ImageIcon, Loader2,
     ArrowLeft, Monitor, Shield, Sparkles, AlertTriangle, CheckCircle2,
-    Clock, RefreshCw, PenTool
+    Clock, RefreshCw, PenTool, Users
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -186,8 +186,8 @@ export default function UniversalComposer() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         contentText: formData.contentText,
-                        mediaUrl: formData.mediaUrl,
-                        scheduledAt: scheduledAtIso,
+                        mediaUrl: formData.mediaUrl || undefined,
+                        scheduledAt: scheduledAtIso || undefined,
                         postType: 'TEXT',
                         targetType: 'FEED',
                         socialAccountId: accountId,
@@ -233,18 +233,34 @@ export default function UniversalComposer() {
                             key={acc.id}
                             onClick={() => toggleAccount(acc.id)}
                             className={cn(
-                                "p-4 rounded-2xl border cursor-pointer transition-all flex flex-col gap-2 items-center text-center",
+                                "p-4 rounded-2xl border cursor-pointer transition-all flex flex-col gap-3 items-center text-center relative overflow-hidden",
                                 isSelected
                                     ? "bg-purple-500/10 border-purple-500 text-white"
                                     : "bg-white/5 border-white/5 text-white/50 hover:bg-white/10"
                             )}
                         >
-                            <span className="text-xs font-black uppercase tracking-wider">{acc.platform}</span>
-                            <span className="text-[10px] truncate w-full px-2" title={acc.metadata?.name || acc.platformAccountId}>
-                                {acc.metadata?.name || acc.platformAccountId}
-                            </span>
+                            <div className="flex items-center justify-center size-12 rounded-full bg-black/40 overflow-hidden border border-white/10">
+                                {acc.metadata?.picture ? (
+                                    <img src={acc.metadata.picture} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                    <Users className="size-5 text-white/20" />
+                                )}
+                            </div>
+                            <div className="flex flex-col gap-1 items-center w-full">
+                                <span className="text-[10px] font-black uppercase tracking-wider bg-white/10 px-2 py-0.5 rounded-full">{acc.platform}</span>
+                                <span className="text-xs font-semibold truncate w-full px-1" title={acc.metadata?.name || acc.platformAccountId}>
+                                    {acc.metadata?.name || acc.platformAccountId}
+                                </span>
+                            </div>
+
+                            {isSelected && (
+                                <div className="absolute top-2 right-2 size-4 bg-purple-500 rounded-full flex items-center justify-center">
+                                    <CheckCircle2 className="size-3 text-white" />
+                                </div>
+                            )}
                         </div>
                     )
+
                 })}
             </div>
             {selectedAccounts.length === 0 && <p className="text-[10px] text-red-400">Please select at least one platform.</p>}

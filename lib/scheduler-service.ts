@@ -106,6 +106,25 @@ export class SchedulerService {
                     data: { status: 'failed', lastError: `Dispatch Failure: ${dispatchError.message}` }
                 }).catch(() => { });
             }
+        } else if (isScheduled) {
+            // SCHEDULED: Dispatch sleep-until event for precise timing
+            const eventName = normalizedPlatform === 'linkedin' ? "linkedin/post.schedule" : "app/post.schedule";
+            try {
+                const scheduleDispatch = await inngest.send({
+                    name: eventName,
+                    data: {
+                        postId: result.trackingId || result.scheduledPostId,
+                        scheduledPostId: result.scheduledPostId,
+                        platform: normalizedPlatform,
+                        scheduledFor: scheduleTime.toISOString()
+                    },
+                    idempotencyKey: `schedule-${result.scheduledPostId}-${scheduleTime.getTime()}`
+                });
+                inngestEventId = scheduleDispatch.ids[0];
+                console.log(`[SchedulerService] Dispatched precise schedule event ${eventName} for ${scheduleTime.toISOString()}`);
+            } catch (dispatchError: any) {
+                console.error(`[SchedulerService] Warning: Failed to dispatch sleep-until event`, dispatchError.message);
+            }
         }
 
         return {

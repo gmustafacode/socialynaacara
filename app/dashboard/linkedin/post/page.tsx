@@ -244,7 +244,7 @@ function LinkedInPostContent() {
             })
 
             if (res.ok) {
-                toast.success(formData.scheduledAt ? "Post scheduled! (Will be processed in our next 10-min window)" : "Post publishing initiated!")
+                toast.success(formData.scheduledAt ? "Post successfully scheduled for precise delivery!" : "Post publishing initiated!")
                 router.push('/dashboard/queue')
             } else {
                 const error = await res.json()
