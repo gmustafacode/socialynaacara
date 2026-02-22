@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import db from "@/lib/db"
+import { apiResponse, handleApiError } from "@/lib/api-utils"
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
     const params = await context.params
@@ -9,7 +10,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 
     const session = await getServerSession(authOptions)
     if (!session) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+        return apiResponse.unauthorized();
     }
 
     const userId = (session.user as any).id
@@ -21,14 +22,12 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
         })
 
         if (!post) {
-            return NextResponse.json({ error: "Post not found" }, { status: 404 })
+            return apiResponse.notFound("Post not found");
         }
 
         // Only allow cancellation of pending/scheduled posts
         if (!['pending', 'PENDING', 'SCHEDULED', 'scheduled'].includes(post.status)) {
-            return NextResponse.json({
-                error: `Cannot cancel a post with status "${post.status}". Only pending or scheduled posts can be cancelled.`
-            }, { status: 400 })
+            return apiResponse.error(`Cannot cancel a post with status "${post.status}". Only pending or scheduled posts can be cancelled.`, 400);
         }
 
         // Update the scheduled post status  
@@ -61,9 +60,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
             }
         }
 
-        return NextResponse.json({ success: true, message: "Post cancelled successfully" })
+        return apiResponse.success({ success: true, message: "Post cancelled successfully" });
     } catch (error) {
-        console.error("Cancel post error:", error)
-        return NextResponse.json({ error: "Internal Server Error" }, { status: 500 })
+        return handleApiError(error);
     }
 }

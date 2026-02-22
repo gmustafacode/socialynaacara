@@ -2,19 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { AIService } from "@/lib/ai-service";
+import { apiResponse, handleApiError } from "@/lib/api-utils";
 
 export async function POST(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions);
         if (!session || !session.user) {
-            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+            return apiResponse.unauthorized();
         }
 
         const body = await req.json();
         const { content, platforms } = body;
 
         if (!content || typeof content !== 'string') {
-            return NextResponse.json({ error: "Content is required" }, { status: 400 });
+            return apiResponse.error("Content is required", 400);
         }
 
         const moderationResult = await AIService.moderateAndOptimize(
@@ -22,13 +23,9 @@ export async function POST(req: NextRequest) {
             platforms || ["General"]
         );
 
-        return NextResponse.json(moderationResult);
+        return apiResponse.success(moderationResult);
 
     } catch (error: any) {
-        console.error("[Content Moderate API] Error:", error);
-        return NextResponse.json(
-            { error: error.message || "Internal server error" },
-            { status: 500 }
-        );
+        return handleApiError(error);
     }
 }

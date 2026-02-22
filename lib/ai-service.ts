@@ -528,11 +528,24 @@ export class AIService {
     /**
      * Executes the LangGraph Intelligence Layer for a given topic
      */
-    static async runIntelligenceLayer(userId: string, topic: string, audienceOverride?: string, toneOverride?: string) {
-        // 1. Fetch User Profile & Preferences
+    static async runIntelligenceLayer(
+        userId: string,
+        topic: string,
+        audienceOverride?: string,
+        toneOverride?: string,
+        postTypeOverride?: string
+    ) {
+        // STEP 1 — Intent & Preference Intake
         const prefs = await db.preference.findUnique({ where: { userId } });
 
-        // 2. Fetch Memory (Past 10 performance learnings)
+        // Resolve universal post type
+        const validPostTypes = ["text_only", "image_only", "text_image", "text_video", "group"] as const;
+        const rawPostType = postTypeOverride || (prefs?.preferredContentTypes?.[0] ?? "text_only");
+        const postType = validPostTypes.includes(rawPostType as any)
+            ? (rawPostType as typeof validPostTypes[number])
+            : "text_only";
+
+        // STEP 2 — Load feedback memory
         const pastLearnings = await db.aiLearningExample.findMany({
             where: { userId },
             orderBy: { createdAt: 'desc' },
@@ -540,20 +553,29 @@ export class AIService {
         });
         const memory = pastLearnings.map(l => `[${l.sentimentScore > 50 ? 'SUCCESS' : 'FAILURE'}] ${l.keyLearnings}`);
 
-        // 3. Initialize & Run Graph
+        // STEP 3 — Build full pipeline state with ALL user preferences
         const initialState = {
             userId,
             topic,
             audience: audienceOverride || prefs?.audienceType || "General",
-            tone: toneOverride || "Professional",
             memory,
             context: "",
             rawContent: "",
-            platformContent: {},
+            mediaUrls: [] as string[],
+            platformContent: {} as Record<string, any>,
             safetyStatus: { isSafe: true, flags: [] },
-            analytics: {},
+            analytics: {} as Record<string, any>,
             feedbackPrompt: "",
-            nextAction: "search" as const
+            nextAction: "search" as const,
+            // ── Injected User Preferences ──────────────────────────────
+            postType,
+            preferredPlatforms: prefs?.preferredPlatforms || ["linkedin"],
+            platformPreferences: (prefs?.platformPreferences ?? {}) as Record<string, any>,
+            useEmojis: prefs?.useEmojis ?? true,
+            contentTone: toneOverride || prefs?.contentTone || "Professional",
+            captionLength: prefs?.captionLength || "Medium",
+            hashtagIntensity: prefs?.hashtagIntensity || "Medium",
+            automationLevel: prefs?.automationLevel || "Semi-Auto",
         };
 
         try {

@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { getUserLimits } from "@/lib/limits";
+import { apiResponse, handleApiError } from "@/lib/api-utils";
 
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions);
         if (!session || !session.user) {
-            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+            return apiResponse.unauthorized();
         }
 
         const userId = (session.user as any).id;
@@ -18,10 +19,9 @@ export async function GET(req: NextRequest) {
 
         const limits = await getUserLimits(userId, platform);
 
-        return NextResponse.json(limits);
+        return apiResponse.success(limits);
 
     } catch (error: any) {
-        console.error("Limits API Error:", error);
-        return NextResponse.json({ error: "Failed to fetch limits" }, { status: 500 });
+        return handleApiError(error);
     }
 }

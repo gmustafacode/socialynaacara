@@ -16,6 +16,7 @@ export interface PostRequest {
     timezone?: string;
     targetType?: string;
     targetId?: string;
+    visibility?: string;
 }
 
 export class SchedulerService {
@@ -50,11 +51,12 @@ export class SchedulerService {
                         socialAccount: { connect: { id: accountId } },
                         description: contentData.description,
                         title: contentData.title || null,
-                        postType: contentType || "ARTICLE",
+                        postType: contentType || "TEXT",
                         mediaUrls: contentData.mediaUrl ? [contentData.mediaUrl] : (contentData.thumbnailUrl ? [contentData.thumbnailUrl] : []),
                         status: isScheduled ? 'SCHEDULED' : 'PENDING',
                         targetType: req.targetType || 'FEED',
-                        visibility: 'PUBLIC'
+                        groupIds: req.targetType === 'GROUP' && req.targetId ? [req.targetId] : [],
+                        visibility: req.targetType === 'GROUP' ? 'CONTAINER' : (req.visibility || 'PUBLIC')
                     }
                 });
                 trackingId = liPost.id;
@@ -66,7 +68,7 @@ export class SchedulerService {
                     userId,
                     socialAccountId: accountId,
                     platform: account.platform,
-                    postType: contentType || "ARTICLE",
+                    postType: contentType || "TEXT",
                     contentText: contentData.description,
                     mediaUrl: contentData.mediaUrl || contentData.thumbnailUrl || null,
                     targetType: req.targetType || "FEED",

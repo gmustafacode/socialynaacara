@@ -2,43 +2,110 @@ import { ChatGroq } from "@langchain/groq";
 import { AgentStateType } from "../state";
 
 /**
- * Agent 2: Content Creator
- * Generates the main post based on context and style.
+ * Agent: Content Creator
+ * Generates a human-like, platform-aware post that matches the user's
+ * style preferences (tone, emoji usage, caption length, post type).
  */
 export async function creatorNode(state: AgentStateType) {
     console.log("[Intelligence-Graph] Starting CREATOR AGENT...");
-    const { topic, audience, tone, context, memory } = state;
+    const {
+        topic, audience, contentTone, context, memory,
+        useEmojis, captionLength, hashtagIntensity, postType, mediaUrls
+    } = state;
 
     if (!process.env.GROQ_API_KEY) {
-        console.error("[Intelligence-Graph] ERROR: GROQ_API_KEY is missing in Creator Node");
         throw new Error("GROQ_API_KEY is missing");
     }
 
     const llm = new ChatGroq({
         model: "llama-3.3-70b-versatile",
-        temperature: 0.7,
+        temperature: 0.8, // Higher temp = more creative/natural
     });
 
-    const prompt = `
-    You are a Creative Content Writer.
-    
-    Topic: ${topic}
-    Audience: ${audience}
-    Tone: ${tone}
-    Research Context: ${context}
-    Past Performance Learnings: ${memory.join("\n")}
-    
-    Task: Write a high-engagement social media post. 
-    Focus on the "WOW" factor. Use micro-formatting, emojis, and a compelling hook.
-    
-    Return ONLY the post content.
-  `;
+    // ─── Build context-aware style instructions ───────────────────────
+    const toneMap: Record<string, string> = {
+        Formal: "Write in a professional, authoritative tone. No slang.",
+        Casual: "Write as if chatting with a friend. Light, breezy, easy to read.",
+        Friendly: "Warm, approachable, encouraging. Like a trusted advisor talking.",
+        Professional: "Clear, confident, value-driven. No fluff, strong CTA.",
+    };
+    const toneInstruction = toneMap[contentTone] || toneMap.Professional;
+
+    const captionLengthMap: Record<string, string> = {
+        Short: "Keep the post under 150 words.",
+        Medium: "Write 150-280 words.",
+        Long: "Write 280-500 words with detailed insights.",
+    };
+    const lengthInstruction = captionLengthMap[captionLength] || captionLengthMap.Medium;
+
+    const hashtagMap: Record<string, string> = {
+        Low: "Include 1-2 highly relevant hashtags at the end.",
+        Medium: "Include 3-5 hashtags at the end.",
+        High: "Include 6-10 trending hashtags at the end.",
+    };
+    const hashtagInstruction = hashtagMap[hashtagIntensity] || hashtagMap.Medium;
+
+    const emojiInstruction = useEmojis
+        ? "Naturally sprinkle relevant emojis throughout the post to add personality. Do not overdo it."
+        : "Do NOT use any emojis.";
+
+    // ─── Post-type context ─────────────────────────────────────────────
+    const postTypeInstruction: Record<string, string> = {
+        text_only: "This is a TEXT ONLY post. Write compelling, standalone text with no media reference.",
+        image_only: `This post will accompany an IMAGE. Write a short, punchy caption that complements the visual. Image URLs available: ${(mediaUrls || []).join(", ")}`,
+        text_image: `This post combines TEXT with an IMAGE. Reference the image naturally in your post. Image: ${(mediaUrls || [])[0] || "provided"}`,
+        text_video: `This post accompanies a VIDEO. Create a compelling hook and caption that entices people to watch.`,
+        group: "This is a GROUP POST. Write an engaging discussion-starter that prompts community interaction and responses.",
+    };
+    const postTypeHint = postTypeInstruction[postType] || postTypeInstruction.text_only;
+
+    // ─── Memory & past learnings ───────────────────────────────────────
+    const memorySection = memory.length > 0
+        ? `\n\nPAST PERFORMANCE LEARNINGS (apply these rules strictly):\n${memory.map(m => `• ${m}`).join("\n")}`
+        : "";
+
+    const systemPrompt = `You are an elite social media copywriter who has spent years crafting content that genuinely resonates with real people.
+
+Your writing style is:
+- NATURAL and HUMAN — it never sounds AI-generated
+- CONVERSATIONAL — reads like a real person talking, not a robot writing
+- ENGAGING — creates genuine curiosity or emotion
+- ORIGINAL — fresh angles, not clichés or corporate-speak
+
+CRITICAL RULES:
+- Never start with "I'm excited to share..." or similar AI openers
+- Avoid phrases: "In conclusion", "It's important to note", "In today's digital age", "As an AI"
+- Do not mention you are an AI
+- Write in first person as the brand/person
+- Each post must have a unique hook in the first line
+- Output ONLY the final post text – no meta-commentary, no "Here is your post:"`;
+
+    const userPrompt = `Write a social media post with these specifications:
+
+TOPIC: ${topic}
+TARGET AUDIENCE: ${audience || "General public"}
+RESEARCH CONTEXT: ${context || "None provided"}${memorySection}
+
+POST TYPE: ${postTypeHint}
+
+STYLE RULES:
+- Tone: ${toneInstruction}
+- Length: ${lengthInstruction}
+- Emojis: ${emojiInstruction}
+- Hashtags: ${hashtagInstruction}
+
+OUTPUT: Return only the final post text, ready to publish.`;
 
     try {
-        const response = await llm.invoke(prompt);
-        const rawContent = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
-        console.log("[Intelligence-Graph] Creator Agent completed.");
+        const response = await llm.invoke([
+            ["system", systemPrompt],
+            ["user", userPrompt],
+        ]);
+        const rawContent = typeof response.content === "string"
+            ? response.content
+            : JSON.stringify(response.content);
 
+        console.log("[Intelligence-Graph] Creator Agent completed.");
         return {
             rawContent,
             nextAction: "orchestrate" as const,

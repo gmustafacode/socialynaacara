@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import {
     Send, Globe, Layout, Type, Image as ImageIcon, Loader2,
     ArrowLeft, Monitor, Shield, Sparkles, AlertTriangle, CheckCircle2,
-    Clock, RefreshCw, PenTool, Users
+    Clock, RefreshCw, PenTool, Users, PlaySquare, FileText, CheckSquare, Layers as LayersIcon
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,7 +20,9 @@ import { toLocalInputString } from '@/lib/utils/time'
 export default function UniversalComposer() {
     const router = useRouter()
     const [loading, setLoading] = useState(false)
+    const [fetchingGroups, setFetchingGroups] = useState(false)
     const [accounts, setAccounts] = useState<any[]>([])
+    const [groups, setGroups] = useState<any[]>([])
 
     // --- WIZARD STATE ---
     // 1: Choose Method (Manual vs AI)
@@ -44,6 +46,10 @@ export default function UniversalComposer() {
         contentText: '',
         mediaUrl: '',
         scheduledAt: '',
+        postType: 'TEXT' as 'TEXT' | 'IMAGE_TEXT' | 'VIDEO_TEXT' | 'ARTICLE',
+        targetType: 'FEED' as 'FEED' | 'GROUP',
+        visibility: 'PUBLIC' as 'PUBLIC' | 'CONNECTIONS',
+        selectedGroups: [] as string[]
     })
 
     // Moderation State
@@ -53,6 +59,12 @@ export default function UniversalComposer() {
     useEffect(() => {
         fetchAccounts()
     }, [])
+
+    useEffect(() => {
+        if (formData.targetType === 'GROUP' && selectedAccounts.length > 0) {
+            fetchGroups(selectedAccounts[0])
+        }
+    }, [formData.targetType, selectedAccounts])
 
     const fetchAccounts = async () => {
         try {
@@ -70,10 +82,37 @@ export default function UniversalComposer() {
         }
     }
 
+    const fetchGroups = async (accountId: string) => {
+        setFetchingGroups(true)
+        try {
+            const res = await fetch(`/api/linkedin/groups?accountId=${accountId}`)
+            if (res.ok) {
+                const data = await res.json()
+                setGroups(data.groups || [])
+            } else {
+                setGroups([])
+                console.error("Failed to fetch groups")
+            }
+        } catch (error) {
+            console.error("Error fetching groups", error)
+        } finally {
+            setFetchingGroups(false)
+        }
+    }
+
     const toggleAccount = (id: string) => {
         setSelectedAccounts(prev =>
             prev.includes(id) ? prev.filter(accId => accId !== id) : [...prev, id]
         )
+    }
+
+    const toggleGroup = (id: string) => {
+        setFormData(prev => ({
+            ...prev,
+            selectedGroups: prev.selectedGroups.includes(id)
+                ? prev.selectedGroups.filter(gid => gid !== id)
+                : [...prev.selectedGroups, id]
+        }))
     }
 
     // ========== STEP HANDLERS ==========
@@ -162,6 +201,11 @@ export default function UniversalComposer() {
             return
         }
 
+        if (formData.targetType === 'GROUP' && formData.selectedGroups.length === 0) {
+            toast.error("Please select at least one group")
+            return
+        }
+
         setLoading(true)
         try {
             let scheduledAtIso = ''
@@ -179,35 +223,53 @@ export default function UniversalComposer() {
             let successCount = 0
             let failCount = 0
 
-            // Dispatch to Orchestrator for EACH selected account
-            for (const accountId of selectedAccounts) {
-                const res = await fetch('/api/posts', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contentText: formData.contentText,
-                        mediaUrl: formData.mediaUrl || undefined,
-                        scheduledAt: scheduledAtIso || undefined,
-                        postType: 'TEXT',
-                        targetType: 'FEED',
-                        socialAccountId: accountId,
-                        publishNow: !scheduledAtIso
-                    })
-                })
+            // Dispatch Logic: If target is group, we might need multiple dispatches per group
 
-                if (res.ok) {
-                    successCount++
+            for (const accountId of selectedAccounts) {
+                const payload = {
+                    contentText: formData.contentText,
+                    mediaUrl: formData.mediaUrl || undefined,
+                    scheduledAt: scheduledAtIso || undefined,
+                    postType: formData.postType,
+                    targetType: formData.targetType,
+                    targetId: formData.targetType === 'GROUP' ? formData.selectedGroups[0] : undefined,
+                    socialAccountId: accountId,
+                    publishNow: !scheduledAtIso
+                }
+
+                // If multiple groups selected, handle them
+                const groupIds = formData.targetType === 'GROUP' ? formData.selectedGroups : []
+                if (groupIds.length > 1) {
+                    for (const gid of groupIds) {
+                        const res = await fetch('/api/posts', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ...payload, targetId: gid })
+                        })
+                        if (res.ok) successCount++
+                        else failCount++
+                    }
                 } else {
-                    failCount++
-                    const errData = await res.json().catch(() => ({}))
-                    console.error(`Failed to dispatch for account ${accountId}:`, errData)
+                    const res = await fetch('/api/posts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    })
+
+                    if (res.ok) {
+                        successCount++
+                    } else {
+                        failCount++
+                        const errData = await res.json().catch(() => ({}))
+                        console.error(`Failed to dispatch for account ${accountId}:`, errData)
+                    }
                 }
             }
 
             if (failCount > 0 && successCount === 0) {
                 throw new Error(`All ${failCount} dispatch(es) failed. Check your account connection.`)
             } else if (failCount > 0) {
-                toast.warning(`Dispatched to ${successCount} account(s). ${failCount} failed — check the Queue for details.`)
+                toast.warning(`Dispatched to ${successCount} account(s)/groups. ${failCount} failed — check the Queue for details.`)
             } else {
                 toast.success(formData.scheduledAt ? "Posts successfully queued by Scheduler Agent!" : "Posts instantly dispatched by Publisher Agent!")
             }
@@ -396,8 +458,100 @@ export default function UniversalComposer() {
 
                     {/* STEP 3: EDITOR & REVIEW */}
                     {step === 3 && (
-                        <Card className="bg-white/[0.02] border-white/5 rounded-[2.5rem] p-10 animate-in slide-in-from-bottom-4 space-y-8">
+                        <Card className="bg-white/[0.02] border-white/5 rounded-[2.5rem] p-10 animate-in slide-in-from-bottom-4 space-y-10">
                             {creationMethod === 'MANUAL' && renderAccountSelector()}
+
+                            {/* Post Category & Target Strategy */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4 border-t border-white/5">
+                                <div className="space-y-4">
+                                    <Label className="text-[10px] font-black uppercase tracking-widest text-white/40">Post Category</Label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {[
+                                            { id: 'TEXT', label: 'Text Only', icon: Type },
+                                            { id: 'IMAGE_TEXT', label: 'Image + Text', icon: ImageIcon },
+                                            { id: 'VIDEO_TEXT', label: 'Video + Text', icon: PlaySquare },
+                                            { id: 'ARTICLE', label: 'Article / Link', icon: FileText }
+                                        ].map(item => (
+                                            <button
+                                                key={item.id}
+                                                onClick={() => setFormData({ ...formData, postType: item.id as any })}
+                                                className={cn(
+                                                    "flex items-center gap-2 px-4 py-3 rounded-xl border text-xs font-bold transition-all",
+                                                    formData.postType === item.id
+                                                        ? "bg-purple-500/20 border-purple-500 text-purple-400"
+                                                        : "bg-white/5 border-white/5 text-white/40 hover:bg-white/10"
+                                                )}
+                                            >
+                                                <item.icon className="size-4" />
+                                                {item.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <Label className="text-[10px] font-black uppercase tracking-widest text-white/40">Target Destination</Label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {[
+                                            { id: 'FEED', label: 'Personal Feed', icon: Globe },
+                                            { id: 'GROUP', label: 'LinkedIn Groups', icon: Users }
+                                        ].map(item => (
+                                            <button
+                                                key={item.id}
+                                                onClick={() => setFormData({ ...formData, targetType: item.id as any })}
+                                                className={cn(
+                                                    "flex items-center gap-2 px-4 py-3 rounded-xl border text-xs font-bold transition-all",
+                                                    formData.targetType === item.id
+                                                        ? "bg-blue-500/20 border-blue-500 text-blue-400"
+                                                        : "bg-white/5 border-white/5 text-white/40 hover:bg-white/10"
+                                                )}
+                                            >
+                                                <item.icon className="size-4" />
+                                                {item.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Group Selection */}
+                            {formData.targetType === 'GROUP' && (
+                                <div className="space-y-4 animate-in slide-in-from-top-2">
+                                    <div className="flex justify-between items-center">
+                                        <Label className="text-[10px] font-black uppercase tracking-widest text-white/40">Select Target Groups</Label>
+                                        {fetchingGroups && <Loader2 className="size-3 animate-spin text-white/20" />}
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        {groups.length > 0 ? groups.map(group => (
+                                            <div
+                                                key={group.id}
+                                                onClick={() => toggleGroup(group.id)}
+                                                className={cn(
+                                                    "p-4 rounded-xl border cursor-pointer transition-all flex items-center gap-3",
+                                                    formData.selectedGroups.includes(group.id)
+                                                        ? "bg-blue-500/10 border-blue-500 text-white"
+                                                        : "bg-white/5 border-white/5 text-white/40 hover:bg-white/10"
+                                                )}
+                                            >
+                                                <div className="size-8 rounded bg-black/40 flex items-center justify-center text-[10px] font-bold border border-white/5">
+                                                    GP
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-xs font-bold truncate max-w-[150px]">{group.id.split(':').pop()}</span>
+                                                    <span className="text-[10px] opacity-40 uppercase font-black">{group.role}</span>
+                                                </div>
+                                                {formData.selectedGroups.includes(group.id) && (
+                                                    <CheckCircle2 className="size-4 text-blue-500 ml-auto" />
+                                                )}
+                                            </div>
+                                        )) : !fetchingGroups && (
+                                            <div className="col-span-2 p-4 rounded-xl border border-dashed border-white/10 text-center text-xs text-white/20">
+                                                No accessible groups found for this account.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
 
                             <div className="space-y-4">
                                 <div className="flex justify-between items-center">
@@ -419,9 +573,11 @@ export default function UniversalComposer() {
                             </div>
 
                             <div className="space-y-4">
-                                <Label className="text-[10px] font-black uppercase tracking-widest text-white/40">Attach Media URL (Image/Video)</Label>
+                                <Label className="text-[10px] font-black uppercase tracking-widest text-white/40">
+                                    {formData.postType === 'ARTICLE' ? 'Attach URL' : 'Attach Media URL (Image/Video)'}
+                                </Label>
                                 <div className="relative group">
-                                    <ImageIcon className="absolute left-6 top-1/2 -translate-y-1/2 size-5 text-white/20" />
+                                    {formData.postType === 'ARTICLE' ? <FileText className="absolute left-6 top-1/2 -translate-y-1/2 size-5 text-white/20" /> : <ImageIcon className="absolute left-6 top-1/2 -translate-y-1/2 size-5 text-white/20" />}
                                     <Input
                                         placeholder="https://..."
                                         className="bg-black/40 border-white/10 h-16 pl-16 rounded-2xl font-bold"
@@ -564,7 +720,17 @@ export default function UniversalComposer() {
                                     const acc = accounts.find(a => a.id === id)
                                     if (!acc) return null
                                     return (
-                                        <Card key={id} className="bg-neutral-900 border-white/5 rounded-3xl p-6 shadow-2xl">
+                                        <Card key={id} className="bg-neutral-900 border-white/5 rounded-3xl p-6 shadow-2xl relative overflow-hidden group">
+                                            {/* Category Badge on Preview */}
+                                            <div className="absolute top-4 right-4 flex gap-2">
+                                                <Badge className="bg-white/10 text-[8px] font-black uppercase">
+                                                    {formData.postType}
+                                                </Badge>
+                                                <Badge className={cn("text-[8px] font-black uppercase", formData.targetType === 'GROUP' ? "bg-blue-500/20 text-blue-400" : "bg-emerald-500/20 text-emerald-400")}>
+                                                    {formData.targetType}
+                                                </Badge>
+                                            </div>
+
                                             <div className="flex items-center gap-3 mb-4">
                                                 <div className="size-6 rounded-full bg-white/5 flex items-center justify-center text-[10px] font-bold">
                                                     {acc.platform.substring(0, 1).toUpperCase()}
@@ -574,9 +740,30 @@ export default function UniversalComposer() {
                                             <p className="text-xs text-white/60 line-clamp-6 leading-relaxed whitespace-pre-wrap">
                                                 {formData.contentText || "Drafting..."}
                                             </p>
+
                                             {formData.mediaUrl && (
                                                 <div className="mt-4 aspect-video w-full rounded-xl bg-black/40 border border-white/5 overflow-hidden relative">
-                                                    <img src={formData.mediaUrl} className="w-full h-full object-cover opacity-70" />
+                                                    {formData.postType === 'VIDEO_TEXT' ? (
+                                                        <div className="w-full h-full flex flex-col items-center justify-center bg-black/60">
+                                                            <PlaySquare className="size-8 text-white/20 mb-2" />
+                                                            <span className="text-[10px] text-white/40 font-bold uppercase">Video stream attached</span>
+                                                        </div>
+                                                    ) : (
+                                                        <img src={formData.mediaUrl} className="w-full h-full object-cover opacity-70" />
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {formData.targetType === 'GROUP' && formData.selectedGroups.length > 0 && (
+                                                <div className="mt-4 pt-4 border-t border-white/5 space-y-2">
+                                                    <span className="text-[8px] font-black uppercase text-white/20">Broadcasting to Groups:</span>
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {formData.selectedGroups.map(gid => (
+                                                            <span key={gid} className="text-[8px] font-bold px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded-full border border-blue-500/20">
+                                                                {gid.split(':').pop()}
+                                                            </span>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             )}
                                         </Card>
@@ -592,5 +779,13 @@ export default function UniversalComposer() {
                 </div>
             </div>
         </div>
+    )
+}
+
+function Badge({ children, className }: { children: React.ReactNode, className?: string }) {
+    return (
+        <span className={cn("px-2 py-0.5 rounded-full", className)}>
+            {children}
+        </span>
     )
 }

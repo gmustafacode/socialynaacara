@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import db from "@/lib/db"
+import { apiResponse, handleApiError } from "@/lib/api-utils"
 
 export async function GET(request: Request, context: { params: Promise<{ userId: string }> }) {
     // Await the params promise
@@ -11,7 +12,7 @@ export async function GET(request: Request, context: { params: Promise<{ userId:
     // Check auth
     const session = await getServerSession(authOptions)
     if (!session || (session.user as any).id !== userId) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+        return apiResponse.unauthorized();
     }
 
     try {
@@ -20,7 +21,7 @@ export async function GET(request: Request, context: { params: Promise<{ userId:
         })
         return NextResponse.json(preferences || {})
     } catch (e) {
-        return NextResponse.json({ error: "Error fetching preferences" }, { status: 500 })
+        return handleApiError(e);
     }
 }
 
@@ -30,7 +31,7 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
     const session = await getServerSession(authOptions)
 
     if (!session || (session.user as any).id !== userId) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+        return apiResponse.unauthorized();
     }
 
     try {
@@ -49,7 +50,12 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
             automationLevel,
             preferredPostingTimes,
             onboardingCompleted,
-            timezone
+            timezone,
+            contentTone,
+            useEmojis,
+            captionLength,
+            hashtagIntensity,
+            platformPreferences
         } = body
 
         const updated = await db.preference.upsert({
@@ -67,7 +73,12 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
                 postingFrequency,
                 automationLevel,
                 onboardingCompleted,
-                timezone
+                timezone,
+                contentTone,
+                useEmojis,
+                captionLength,
+                hashtagIntensity,
+                platformPreferences: platformPreferences ? (typeof platformPreferences === 'string' ? JSON.parse(platformPreferences) : platformPreferences) : undefined,
             },
             create: {
                 userId,
@@ -83,14 +94,18 @@ export async function PUT(request: Request, context: { params: Promise<{ userId:
                 postingFrequency,
                 automationLevel,
                 onboardingCompleted: onboardingCompleted ?? false,
-                timezone
+                timezone,
+                contentTone,
+                useEmojis: useEmojis ?? true,
+                captionLength,
+                hashtagIntensity,
+                platformPreferences: platformPreferences ? (typeof platformPreferences === 'string' ? JSON.parse(platformPreferences) : platformPreferences) : undefined,
             }
         })
 
         return NextResponse.json(updated)
     } catch (e) {
-        console.error("Error updating preferences:", e)
-        return NextResponse.json({ error: "Error updating preferences" }, { status: 500 })
+        return handleApiError(e);
     }
 }
 

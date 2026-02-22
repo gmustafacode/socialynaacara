@@ -61,6 +61,11 @@ export function handleApiError(error: any) {
         return apiResponse.error(`Conflict: A record with this ${target || 'value'} already exists.`, 409);
     }
 
+    // Malformed JSON check (SyntaxError from req.json)
+    if (error instanceof SyntaxError && error.message.includes('JSON')) {
+        return apiResponse.error("Invalid JSON payload", 400);
+    }
+
     // Default 500 Error
     const message = process.env.NODE_ENV === "development" ? error.message : "Internal server error";
     return apiResponse.error(message, 500);

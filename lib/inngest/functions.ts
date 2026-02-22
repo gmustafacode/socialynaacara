@@ -1,5 +1,5 @@
 import { inngest } from "./client";
-import { isTriggerDue, getNextContentType } from "../automation-helper";
+import { isTriggerDue } from "../automation-helper";
 import db from "../db";
 import { LinkedInPostingService } from "../linkedin-posting-service";
 import { checkPostingLimits } from "../limits";
@@ -250,7 +250,7 @@ export const schedulerPublisher = inngest.createFunction(
                     });
 
                     if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
-                    await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'published', publishedAt: new Date() } });
+                    await db.scheduledPost.update({ where: { id: post.id }, data: { status: 'processing', updatedAt: new Date() } });
                     return { success: true };
                 });
             }
@@ -312,46 +312,81 @@ export const schedulerPublisher = inngest.createFunction(
                     const pref = await db.preference.findUnique({ where: { userId } });
                     if (!pref) return;
 
-                    const nextContentType = await getNextContentType(pref.userId, pref.preferredContentTypes);
-                    const topic = `A ${nextContentType} post about ${pref.industryNiche || 'my name'} for ${pref.brandName || 'my brand'} focusing on ${pref.contentGoals || 'growth'}`;
+                    // ── UNIFIED PIPELINE: All automation goes through runIntelligenceLayer ──
+                    // This is the ONLY place content generation happens.
+                    // It will: discover topic → fetch media → generate → optimize → safety check → analytics
+                    const niche = pref.industryNiche || 'my industry';
+                    const brand = pref.brandName || 'my brand';
+                    const goals = pref.contentGoals || 'growth';
+                    const topic = `${niche} insights for ${brand}: ${goals}`;
 
-                    const generatedContentText = await AIService.generateContent(
-                        pref.userId,
-                        topic,
-                        pref.audienceType || 'General public',
-                        'Professional'
-                    ) || `Generating ${nextContentType} content... #Automation`;
+                    let graphResult: any = null;
+                    try {
+                        graphResult = await AIService.runIntelligenceLayer(
+                            pref.userId,
+                            topic,
+                            pref.audienceType || undefined,
+                            pref.contentTone || undefined
+                        );
+                    } catch (err) {
+                        console.error(`[Inngest] Intelligence pipeline failed for user ${userId}:`, err);
+                        return;
+                    }
+
+                    // ── Safety gate: only proceed if content passed moderation ──
+                    if (!graphResult?.safetyStatus?.isSafe) {
+                        console.warn(`[Inngest] Safety check failed for user ${userId}. Skipping publish.`);
+                        return;
+                    }
+
+                    const platformContent: Record<string, any> = graphResult.platformContent || {};
+                    const mediaUrls: string[] = graphResult.mediaUrls || [];
 
                     if (pref.automationLevel === 'Semi-Auto') {
+                        // Save to content queue for manual review
+                        const firstPlatform = Object.keys(platformContent)[0] || 'general';
+                        const postText = platformContent[firstPlatform]?.text || graphResult.rawContent || '';
                         await db.contentQueue.create({
                             data: {
                                 userId: pref.userId,
                                 source: 'automation',
-                                contentType: nextContentType,
-                                rawContent: generatedContentText,
+                                contentType: pref.preferredContentTypes?.[0] || 'text_only',
+                                rawContent: postText,
                                 status: 'pending',
-                                title: `Auto-generated ${nextContentType} content`,
+                                title: `Auto-generated content for review`,
+                                mediaUrl: mediaUrls[0] || null,
                             }
                         });
+
                     } else if (pref.automationLevel === 'Full Auto') {
-                        const platforms = pref.preferredPlatforms || [];
-                        for (const platform of platforms) {
+                        // ── Determine active platforms (respecting per-platform enable/disable) ──
+                        const platformPrefs = (pref.platformPreferences ?? {}) as Record<string, any>;
+                        const activePlatforms = (pref.preferredPlatforms || []).filter(p => {
+                            const ppref = platformPrefs[p];
+                            return ppref === undefined || ppref?.enabled !== false;
+                        });
+
+                        for (const platform of activePlatforms) {
                             const socialAccount = await db.socialAccount.findFirst({
                                 where: { userId: pref.userId, platform, status: 'active' }
                             });
                             if (!socialAccount) continue;
 
-                            let contentId = null;
+                            const platformText = platformContent[platform]?.text || graphResult.rawContent || '';
+                            const mediaUrl = mediaUrls[0] || null;
+
+                            let contentId: string | null = null;
                             if (platform === 'linkedin') {
                                 const liPost = await db.linkedInPost.create({
                                     data: {
                                         userId: pref.userId,
                                         socialAccountId: socialAccount.id,
                                         postType: 'TEXT',
-                                        description: generatedContentText,
+                                        description: platformText,
                                         targetType: 'FEED',
                                         visibility: 'PUBLIC',
                                         status: 'PENDING',
+                                        ...(mediaUrl ? { mediaUrls: [mediaUrl] } : {})
                                     }
                                 });
                                 contentId = liPost.id;
@@ -362,12 +397,13 @@ export const schedulerPublisher = inngest.createFunction(
                                     userId: pref.userId,
                                     socialAccountId: socialAccount.id,
                                     platform,
-                                    postType: nextContentType.toUpperCase(),
-                                    contentText: generatedContentText,
+                                    postType: (pref.preferredContentTypes?.[0] || 'text_only').toUpperCase(),
+                                    contentText: platformText,
                                     targetType: 'FEED',
                                     status: 'pending',
                                     scheduledAt: new Date(),
-                                    contentId
+                                    contentId,
+                                    mediaUrl,
                                 }
                             });
 
@@ -382,6 +418,7 @@ export const schedulerPublisher = inngest.createFunction(
                         }
                     }
                 });
+
             }
 
             // 2. SCHEDULER DISPATCH PHASE
@@ -454,11 +491,12 @@ export const schedulerPublisher = inngest.createFunction(
                             });
 
                             if (!resp.ok) throw new Error(`Webhook Error: ${resp.status}`);
+                            // Mark as processing, not published! The webhook callback will finalize it.
                             await db.scheduledPost.update({
                                 where: { id: post.id },
-                                data: { status: 'published', publishedAt: new Date(), updatedAt: new Date() }
+                                data: { status: 'processing', updatedAt: new Date() }
                             });
-                            results.push({ id: post.id, status: "published_via_webhook" });
+                            results.push({ id: post.id, status: "dispatched_via_webhook" });
                         }
                     } catch (err: any) {
                         const isMaxRetries = post.retryCount >= 4;

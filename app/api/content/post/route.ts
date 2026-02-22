@@ -3,11 +3,12 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import db from "@/lib/db";
 import { decrypt } from "@/lib/encryption";
+import { apiResponse, handleApiError } from "@/lib/api-utils";
 
 export async function POST(request: Request) {
     const session = await getServerSession(authOptions);
     if (!session || !session.user) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        return apiResponse.unauthorized();
     }
 
     try {
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
         });
 
         if (!account) {
-            return NextResponse.json({ error: "Account not found" }, { status: 404 });
+            return apiResponse.notFound("Account not found");
         }
 
         // Decrypt token for operation
@@ -40,10 +41,9 @@ export async function POST(request: Request) {
             }
         });
 
-        return NextResponse.json({ success: true, message: `Post sent to ${account.platform}` });
+        return apiResponse.success({ success: true, message: `Post sent to ${account.platform}` });
 
     } catch (error: any) {
-        console.error("Posting error:", error);
-        return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });
+        return handleApiError(error);
     }
 }

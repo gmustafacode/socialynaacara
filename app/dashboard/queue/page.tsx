@@ -1,4 +1,3 @@
-
 "use client"
 
 import React, { useState, useEffect } from "react"
@@ -17,10 +16,12 @@ import {
     History,
     MoreHorizontal,
     Trash2,
-    Wand2
+    Wand2,
+    Image as ImageIcon,
+    Link as LinkIcon
 } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
@@ -28,55 +29,42 @@ import { cn } from "@/lib/utils"
 import Link from "next/link"
 
 export default function QueuePage() {
+    const [activeTab, setActiveTab] = useState("queue")
     const [loading, setLoading] = useState(true)
     const [queue, setQueue] = useState<any[]>([])
     const [history, setHistory] = useState<any[]>([])
-    const [activeTab, setActiveTab] = useState("queue")
 
     const fetchData = async () => {
         setLoading(true)
         try {
-            // 1. Fetch content queue
-            const queueRes = await fetch('/api/content')
-            if (queueRes.ok) {
-                const queueData = await queueRes.json()
-                setQueue(queueData)
-            }
+            // 1. Fetch Ingested Queue
+            const qRes = await fetch('/api/content')
+            const qData = await qRes.json()
 
-            // 2. Fetch LinkedIn post history
-            const historyRes = await fetch('/api/linkedin/posts')
-            const historyData = historyRes.ok ? await historyRes.json() : []
+            // 2. Fetch History (LinkedIn Posts & App Scheduled Posts)
+            const [liRes, appRes] = await Promise.all([
+                fetch('/api/linkedin/posts'),
+                fetch('/api/posts')
+            ])
 
-            // 3. Fetch Generic/Cross-platform post history
-            const genericRes = await fetch('/api/posts')
-            const genericData = genericRes.ok ? await genericRes.json() : []
+            const liData = await liRes.json()
+            const appData = await appRes.json()
 
-            // 4. Unify and Filter Duplicates
-            // We use 'linkedInPost' as the primary for LinkedIn, and 'scheduledPost' for others.
-            // If a 'scheduledPost' has a 'contentId', it means it's a pointer to a 'linkedInPost'
-            // and we should skip it to avoid duplicates.
-            const historyMap = new Map();
+            setQueue(qData.content || [])
 
-            // First pass: add all LinkedIn posts
-            historyData.forEach((p: any) => {
-                historyMap.set(p.id, { ...p, _type: 'linkedin' });
-            });
+            // Unify history: Filter out duplicates (scheduled posts that have a matching trackingId)
+            const liPosts = (liData.posts || []).map((p: any) => ({ ...p, _type: 'linkedin' }));
+            const scheduledPosts = (appData.data || []).map((p: any) => ({ ...p, _type: 'app_scheduled' }));
 
-            // Second pass: add generic posts only if they aren't pointers to existing LinkedIn posts
-            genericData.forEach((p: any) => {
-                if (p.contentId && historyMap.has(p.contentId)) {
-                    // Skip duplicate
-                    return;
-                }
-                historyMap.set(p.id, {
-                    ...p,
-                    _type: 'generic',
-                    description: p.contentText,
-                    postType: p.postType
-                });
-            });
-
-            const combinedHistory = Array.from(historyMap.values())
+            // Combine and sort by date
+            const combinedHistory = [...liPosts, ...scheduledPosts]
+                // Deduplicate: If an 'app_scheduled' post has a contentId that matches a 'linkedin' post ID, keep the 'linkedin' one
+                .filter((p, index, self) => {
+                    if (p._type === 'app_scheduled' && p.contentId) {
+                        return !self.some(other => other._type === 'linkedin' && other.id === p.contentId);
+                    }
+                    return true;
+                })
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
             setHistory(combinedHistory)
@@ -92,7 +80,7 @@ export default function QueuePage() {
     }, [])
 
     const getStatusColor = (status: string) => {
-        switch (status.toUpperCase()) {
+        switch (status?.toUpperCase()) {
             case 'PUBLISHED': return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
             case 'FAILED': return 'bg-red-500/10 text-red-400 border-red-500/20';
             case 'PROCESSING': return 'bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse';
@@ -138,14 +126,9 @@ export default function QueuePage() {
                         className="rounded-2xl border border-white/10 hover:bg-white/5"
                         disabled={loading}
                     >
-                        <RefreshCw className={cn("size-4 mr-2", loading && "animate-spin")} />
+                        {loading ? <RefreshCw className="size-4 animate-spin" /> : <RefreshCw className="size-4 mr-2" />}
                         Refresh Engine
                     </Button>
-                    <Link href="/dashboard/linkedin/post">
-                        <Button className="rounded-2xl bg-blue-600 hover:bg-blue-500 font-bold px-8">
-                            New Broadcast
-                        </Button>
-                    </Link>
                 </div>
             </div>
 
@@ -153,7 +136,7 @@ export default function QueuePage() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 {[
                     { label: 'Pending Queue', val: queue.filter(q => q.status === 'pending').length, icon: Layers, color: 'text-blue-400' },
-                    { label: 'Scheduled', val: history.filter(h => h.status === 'SCHEDULED').length, icon: Clock, color: 'text-purple-400' },
+                    { label: 'Scheduled', val: history.filter(h => h.status === 'SCHEDULED' || h.status === 'pending').length, icon: Clock, color: 'text-purple-400' },
                     { label: 'Successful', val: history.filter(h => h.status === 'PUBLISHED').length, icon: CheckCircle2, color: 'text-emerald-400' },
                     { label: 'Total Logs', val: history.length, icon: History, color: 'text-white/40' },
                 ].map((stat, i) => (
@@ -232,7 +215,7 @@ export default function QueuePage() {
                                                 <Wand2 className="size-4 mr-2" /> Auto Schedule
                                             </Button>
 
-                                            <Link href={`/dashboard/linkedin/post?title=${encodeURIComponent(item.title || '')}&description=${encodeURIComponent(item.summary || '')}&mediaUrl=${encodeURIComponent(item.mediaUrl || '')}`} title="Edit Manually in Composer">
+                                            <Link href={`/dashboard/composer?title=${encodeURIComponent(item.title || '')}&description=${encodeURIComponent(item.summary || '')}&mediaUrl=${encodeURIComponent(item.mediaUrl || '')}`} title="Edit Manually in Composer">
                                                 <Button className="rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 size-12 p-0">
                                                     <Send className="size-4" />
                                                 </Button>
@@ -285,31 +268,49 @@ export default function QueuePage() {
                                                     {post.status}
                                                 </Badge>
                                                 <div className="h-4 w-px bg-white/5" />
+                                                <Badge className="bg-white/10 text-[8px] font-black uppercase">
+                                                    {post.postType || 'TEXT'}
+                                                </Badge>
+                                                <div className="h-4 w-px bg-white/5" />
+                                                <Badge className={cn("text-[8px] font-black uppercase", post.targetType === 'GROUP' ? "bg-blue-500/20 text-blue-400" : "bg-emerald-500/20 text-emerald-400")}>
+                                                    {post.targetType || 'FEED'}
+                                                </Badge>
+                                                <div className="h-4 w-px bg-white/5" />
                                                 <span className="text-[10px] font-black uppercase tracking-widest text-white/20">
                                                     {new Date(post.createdAt).toLocaleString()}
                                                 </span>
                                             </div>
-                                            <h4 className="text-xl font-black text-white leading-tight line-clamp-1">{post.title || "Social Transmission"}</h4>
-                                            <p className="text-sm text-white/40 line-clamp-2 font-medium">{post.description}</p>
+                                            <h4 className="text-xl font-black text-white leading-tight line-clamp-1">{post.title || post.contentText?.substring(0, 50) || "Social Transmission"}</h4>
+                                            <p className="text-sm text-white/40 line-clamp-2 font-medium">{post.description || post.contentText}</p>
 
-                                            {post.errorMessage && (
+                                            {(post.targetType === 'GROUP' || post.groupIds?.length > 0) && (
+                                                <div className="flex flex-wrap gap-2 mt-2">
+                                                    {(post.groupIds || [post.targetId]).filter(Boolean).map((gid: string) => (
+                                                        <span key={gid} className="text-[9px] font-black px-2 py-0.5 bg-blue-500/10 text-blue-400 rounded-full border border-blue-500/20 uppercase">
+                                                            Group: {gid.split(':').pop()}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {post.errorMessage || post.lastError ? (
                                                 <div className="mt-4 p-3 rounded-xl bg-red-500/5 border border-red-500/10 flex items-center gap-3 text-red-400 text-xs">
                                                     <AlertCircle className="size-4" />
                                                     <span className="font-bold underline decoration-dotted underline-offset-4">Error Log:</span>
-                                                    <span className="opacity-80 italic">{post.errorMessage}</span>
+                                                    <span className="opacity-80 italic">{post.errorMessage || post.lastError}</span>
                                                 </div>
-                                            )}
+                                            ) : null}
                                         </div>
 
                                         <div className="flex flex-col md:items-end justify-between self-stretch gap-4">
                                             <div className="flex items-center gap-2">
                                                 <div className={cn(
                                                     "size-8 rounded-full flex items-center justify-center border",
-                                                    post._type === 'linkedin' ? "bg-blue-600/10 border-blue-500/20" : "bg-purple-600/10 border-purple-500/20"
+                                                    post._type === 'linkedin' || post.platform === 'linkedin' ? "bg-blue-600/10 border-blue-500/20" : "bg-purple-600/10 border-purple-500/20"
                                                 )}>
                                                     <span className={cn(
                                                         "text-[10px] font-black uppercase",
-                                                        post._type === 'linkedin' ? "text-blue-400" : "text-purple-400"
+                                                        post._type === 'linkedin' || post.platform === 'linkedin' ? "text-blue-400" : "text-purple-400"
                                                     )}>
                                                         {post.platform?.substring(0, 2) || (post._type === 'linkedin' ? 'LI' : 'GP')}
                                                     </span>
@@ -335,7 +336,6 @@ export default function QueuePage() {
                                                         size="sm"
                                                         onClick={async () => {
                                                             try {
-                                                                // LinkedIn posts use the dedicated retry endpoint; generic ScheduledPosts use the cancel+reschedule approach
                                                                 const retryUrl = post._type === 'linkedin'
                                                                     ? `/api/linkedin/posts/${post.id}/retry`
                                                                     : `/api/posts/scheduled/${post.id}/retry`
@@ -348,67 +348,32 @@ export default function QueuePage() {
                                                                     toast.error(data.error || "Retry failed")
                                                                 }
                                                             } catch (e) {
-                                                                toast.error("Connection error")
+                                                                toast.error("Retry connection error")
                                                             }
                                                         }}
-                                                        className="rounded-xl bg-red-500/20 hover:bg-red-500/40 text-red-400 border border-red-500/30 text-[10px] font-black uppercase tracking-widest h-10 px-6"
+                                                        className="rounded-xl bg-red-600 hover:bg-red-500 text-[10px] font-black uppercase tracking-widest h-10 px-6"
                                                     >
-                                                        Retry Dispatch <RefreshCw className="size-3 ml-2" />
+                                                        Retry Job <RefreshCw className="size-3 ml-2" />
                                                     </Button>
-                                                ) : ['SCHEDULED', 'PENDING', 'pending'].includes(post.status) ? (
+                                                ) : (post.status === 'SCHEDULED' || post.status === 'pending') ? (
                                                     <Button
                                                         size="sm"
+                                                        variant="ghost"
                                                         onClick={() => handleCancelPost(post.id)}
-                                                        className="rounded-xl bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/20 text-[10px] font-black uppercase tracking-widest h-10 px-6"
+                                                        className="rounded-xl border border-white/10 hover:bg-red-500/10 hover:text-red-400 text-[10px] font-black uppercase tracking-widest h-10 px-6"
                                                     >
-                                                        Cancel <Trash2 className="size-3 ml-2" />
+                                                        Cancel Entry <Trash2 className="size-3 ml-2" />
                                                     </Button>
-                                                ) : post.status === 'CANCELLED' ? (
-                                                    <Button disabled size="sm" variant="ghost" className="rounded-xl border border-white/5 text-[10px] font-black uppercase tracking-widest h-10 px-6 opacity-30">
-                                                        Cancelled
-                                                    </Button>
-                                                ) : (
-                                                    <Button disabled size="sm" variant="ghost" className="rounded-xl border border-white/5 text-[10px] font-black uppercase tracking-widest h-10 px-6 opacity-30">
-                                                        Processing
-                                                    </Button>
-                                                )}
-                                                <Button size="sm" variant="ghost" className="rounded-xl border border-white/10 hover:bg-white/5 size-10 p-0">
-                                                    <MoreHorizontal className="size-4" />
-                                                </Button>
+                                                ) : null}
                                             </div>
                                         </div>
                                     </div>
-                                    {/* Progress Bar */}
-                                    {['PROCESSING', 'FAILED', 'PARTIAL_SUCCESS'].includes(post.status) && (
-                                        <div className="h-1 w-full bg-white/5">
-                                            <div className={cn(
-                                                "h-full transition-all duration-1000",
-                                                post.status === 'PROCESSING' ? "w-1/2 bg-blue-500 animate-pulse" : "w-full bg-red-500/50"
-                                            )} />
-                                        </div>
-                                    )}
                                 </Card>
                             ))}
                         </div>
                     )}
                 </TabsContent>
             </Tabs>
-        </div >
-    )
-}
-
-function ImageIcon({ className }: { className?: string }) {
-    return (
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-            <rect width="18" height="18" x="3" y="3" rx="2" ry="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-        </svg>
-    )
-}
-
-function LinkIcon({ className }: { className?: string }) {
-    return (
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-        </svg>
+        </div>
     )
 }

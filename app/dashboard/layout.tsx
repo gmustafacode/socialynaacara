@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Share2, BarChart3, Settings, Layers, Lock, Menu, X, User } from 'lucide-react';
+import { Home, Share2, BarChart3, Settings, Layers, Lock, Menu, X, User, Sparkles } from 'lucide-react';
 import { UserNav } from '@/components/UserNav';
 import { QuotaTracker } from '@/components/QuotaTracker';
 import { cn } from '@/lib/utils';
@@ -46,8 +46,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         },
         {
             section: 'Channels', items: [
-                { href: '/dashboard/linkedin/post', icon: Share2, label: 'LinkedIn Composer' },
-                { href: '/dashboard/composer', icon: Layers, label: 'Universal Composer' },
+                { href: '/dashboard/composer', icon: Sparkles, label: 'Smart Composer' },
+                { href: '/dashboard/linkedin/post', icon: Share2, label: 'Legacy Composer' },
                 { href: '/dashboard/linkedin/control-panel', icon: Lock, label: 'LinkedIn Controls' },
             ]
         },

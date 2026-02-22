@@ -3,14 +3,14 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { AIService } from "@/lib/ai-service";
 import { GenerateContentSchema } from "@/lib/validations/api";
-import { ZodError } from "zod";
+import { apiResponse, handleApiError } from "@/lib/api-utils";
 
 export async function POST(req: NextRequest) {
     try {
         // 1. Authentication Check
         const session = await getServerSession(authOptions);
         if (!session?.user) {
-            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+            return apiResponse.unauthorized();
         }
         const userId = (session.user as any).id;
 
@@ -18,17 +18,18 @@ export async function POST(req: NextRequest) {
         const json = await req.json();
         const body = GenerateContentSchema.parse(json);
 
-        // 3. AIService Execution
-        console.log(`[Content Generate API] Starting for User ${userId}, Topic: ${body.topic}`);
+        // 3. AIService Execution — runs the full unified pipeline
+        console.log(`[Content Generate API] Starting for User ${userId}, Topic: ${body.topic}, PostType: ${body.postType}`);
         const intelligenceResult = await AIService.runIntelligenceLayer(
             userId,
             body.topic,
             body.audience,
-            body.tone
+            body.tone,
+            body.postType  // ← pass universal post type through to pipeline
         );
 
         if (!intelligenceResult) {
-            return NextResponse.json({ error: "Failed to generate intelligent content" }, { status: 500 });
+            return apiResponse.error("Failed to generate intelligent content", 500);
         }
 
         // 4. Response Mapping
@@ -41,17 +42,6 @@ export async function POST(req: NextRequest) {
         });
 
     } catch (error: any) {
-        if (error instanceof ZodError) {
-            return NextResponse.json({
-                error: "Validation failed",
-                details: error.issues.map((e: any) => `${e.path.join('.')}: ${e.message}`)
-            }, { status: 400 });
-        }
-
-        console.error("[Content Generate API] CRITICAL Error:", error);
-        return NextResponse.json(
-            { error: "Internal server error", message: process.env.NODE_ENV === 'development' ? error.message : undefined },
-            { status: 500 }
-        );
+        return handleApiError(error);
     }
 }

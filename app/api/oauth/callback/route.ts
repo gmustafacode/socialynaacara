@@ -156,7 +156,9 @@ export async function GET(request: Request) {
             // Instagram Graph API logic: 
             // 1. Get user pages
             // 2. Find page with linked IG account
-            const pagesRes = await fetch(`https://graph.facebook.com/v18.0/me/accounts?access_token=${tokens.access_token}`);
+            const pagesRes = await fetch(`https://graph.facebook.com/v18.0/me/accounts?access_token=${tokens.access_token}`, {
+                signal: AbortSignal.timeout(15000)
+            });
             const pagesData = await pagesRes.json();
 
             // For simplicity, take the first page that has an IG Business Account
@@ -287,17 +289,23 @@ export async function GET(request: Request) {
 
             if (existing && existing.id !== accountId) {
                 console.log(`[OAuth] Resolving conflict: Deactivating old account ${existing.id} for platform ${platform}`);
-                // Instead of deleting, we mark as 'archived' or 'inactive' to preserve history
+                // Use a transaction to ensure both updates happen atomically
+                await db.$transaction([
+                    db.socialAccount.update({
+                        where: { id: existing.id },
+                        data: { status: 'archived', platformAccountId: `${existing.platformAccountId}_archived_${Date.now()}` }
+                    }),
+                    db.socialAccount.update({
+                        where: { id: accountId },
+                        data: updateData,
+                    })
+                ]);
+            } else {
                 await db.socialAccount.update({
-                    where: { id: existing.id },
-                    data: { status: 'archived', platformAccountId: `${existing.platformAccountId}_archived_${Date.now()}` }
+                    where: { id: accountId },
+                    data: updateData,
                 });
             }
-
-            await db.socialAccount.update({
-                where: { id: accountId },
-                data: updateData,
-            });
         } else {
             // No pending accountId (e.g. initial connect flow)
             // Check if this platform account exists
@@ -338,8 +346,8 @@ export async function GET(request: Request) {
 
         return NextResponse.redirect(`${getBaseUrl()}/dashboard/connect?success=true&platform=${platform}`);
 
-    } catch (e) {
+    } catch (e: any) {
         console.error("OAuth callback error:", e);
-        return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+        return NextResponse.redirect(`${getBaseUrl()}/dashboard/connect?error=internal_server_error&message=${encodeURIComponent(e.message || 'Unknown error occurred')}`);
     }
 }

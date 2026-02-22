@@ -259,6 +259,11 @@ export async function getValidAccessToken(accountId: string) {
     });
 
     if (!account) return null;
+    if (account.status !== 'active') {
+        console.warn(`[OAuth] Token requested for inactive account ${accountId} (Status: ${account.status}). Denied.`);
+        return null;
+    }
+
 
     // Proactive Refresh: Check if expires within 5 minutes
     const buffer = 5 * 60 * 1000;

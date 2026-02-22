@@ -23,7 +23,8 @@ export const GenerateContentSchema = z.object({
     audience: z.string().optional().default("General"),
     tone: z.string().optional().default("Professional"),
     platforms: z.array(PlatformSchema).optional().default(["linkedin"]),
-    mediaType: z.enum(["text", "image", "video", "carousel"]).optional().default("text")
+    // Universal post types — replaces legacy mediaType enum
+    postType: z.enum(["text_only", "image_only", "text_image", "text_video", "group"]).optional().default("text_only")
 });
 
 /**
@@ -54,8 +55,15 @@ export const PreferencesSchema = z.object({
     audienceType: z.string().max(100).optional(),
     contentGoals: z.string().max(500).optional(),
     preferredPlatforms: z.array(z.string()).optional(),
+    preferredContentTypes: z.array(z.enum(["text_only", "image_only", "text_image", "text_video", "group"])).optional(),
     postingFrequency: z.string().optional(),
     automationLevel: z.enum(["Manual", "Semi-Auto", "Full Auto"]).optional(),
+    contentTone: z.enum(["Formal", "Casual", "Friendly", "Professional"]).optional(),
+    useEmojis: z.boolean().optional(),
+    captionLength: z.enum(["Short", "Medium", "Long"]).optional(),
+    hashtagIntensity: z.enum(["Low", "Medium", "High"]).optional(),
+    platformPreferences: z.record(z.string(), z.any()).optional(),
+    timezone: z.string().optional(),
 });
 
 /**
