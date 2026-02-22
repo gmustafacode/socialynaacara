@@ -129,7 +129,7 @@ export const contentEngine = inngest.createFunction(
 export const schedulerPublisher = inngest.createFunction(
     { id: "scheduler-publisher", concurrency: 5 },
     [
-        { cron: "*/1 * * * *" }, // Engine Tick (Automation + Scheduler)
+        { cron: "*/10 * * * *" }, // Engine Tick (Automation + Scheduler)
         { event: "linkedin/post.publish" }, // Immediate Publisher (Legacy Support)
         { event: "app/post.publish_now" }, // Immediate Publisher (Universal Support)
         { event: "linkedin/post.schedule" }, // sleep-until precise delivery
@@ -279,7 +279,29 @@ export const schedulerPublisher = inngest.createFunction(
                     if (!Array.isArray(schedule) || schedule.length === 0) continue;
 
                     const isDue = isTriggerDue(schedule as any, (pref as any).timezone, now);
-                    if (isDue) triggered.push(pref.userId);
+                    if (isDue) {
+                        // 15-minute cooldown check using recent activity
+                        // This prevents duplicates during the 5min fuzzy window without schema changes
+                        const [recentContent, recentPost] = await Promise.all([
+                            db.contentQueue.findFirst({
+                                where: {
+                                    userId: pref.userId,
+                                    source: 'automation',
+                                    createdAt: { gte: new Date(now.getTime() - 15 * 60000) }
+                                }
+                            }),
+                            db.scheduledPost.findFirst({
+                                where: {
+                                    userId: pref.userId,
+                                    createdAt: { gte: new Date(now.getTime() - 15 * 60000) }
+                                }
+                            })
+                        ]);
+
+                        if (!recentContent && !recentPost) {
+                            triggered.push(pref.userId);
+                        }
+                    }
                 }
                 return triggered;
             });
