@@ -77,7 +77,8 @@ CRITICAL RULES:
 - Avoid phrases: "In conclusion", "It's important to note", "In today's digital age", "As an AI"
 - Do not mention you are an AI
 - Write in first person as the brand/person
-- Each post must have a unique hook in the first line
+- Each post must have a UNIQUE, fresh angle — never repeat the same perspective twice
+- Start with a compelling hook that is specifically tailored to the DISCOVERED TOPIC
 - Output ONLY the final post text – no meta-commentary, no "Here is your post:"`;
 
     const userPrompt = `Write a social media post with these specifications:

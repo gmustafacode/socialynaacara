@@ -334,6 +334,65 @@ export class AIService {
     }
 
     /**
+     * AI Brainstorming Engine: Generates a fresh, varied topic based on user niche and goals,
+     * specifically avoiding recently used topics to prevent repetition.
+     */
+    static async generateDynamicTopic(
+        userId: string,
+        niche: string,
+        brand: string,
+        goals: string,
+        recentTopics: string[] = []
+    ): Promise<string> {
+        if (!this.GROQ_API_KEY) return `${niche} insights for ${brand}: ${goals}`;
+
+        const avoidanceContext = recentTopics.length > 0
+            ? `\nCRITICAL: Avoid these recently used topics/angles:\n${recentTopics.map(t => `- ${t}`).join("\n")}`
+            : "";
+
+        const prompt = `
+        You are a creative content strategist. Your goal is to brainstorm a FRESH, HIGH-ENGAGEMENT topic or angle for a social media post.
+        
+        USER CONTEXT:
+        - Niche: ${niche}
+        - Brand: ${brand}
+        - Goals: ${goals}
+        ${avoidanceContext}
+
+        TASK:
+        Generate ONE specific, compelling topic or question that is different from the recent topics listed.
+        Focus on current trends, unique insights, or provocative questions within the niche.
+        
+        OUTPUT:
+        Return ONLY the topic text (max 20 words). No intro, no quotes.
+        `;
+
+        try {
+            const response = await fetch(this.GROQ_API_URL, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${this.GROQ_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: "llama-3.3-70b-versatile",
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: 0.9
+                }),
+                signal: AbortSignal.timeout(20000)
+            });
+
+            if (!response.ok) throw new Error("API Error");
+            const data = await response.json();
+            const topic = data.choices[0].message.content.trim().replace(/^"|"$/g, '');
+            return topic;
+        } catch (e) {
+            console.error("[AI-Service] Dynamic Topic Generation Failed:", e);
+            return `${niche} insights for ${brand}: ${goals}`;
+        }
+    }
+
+    /**
      * AI Feedback Loop: Analyzes post comments/engagement to extract sentiment and learning guidelines
      * for future content generation and evaluation.
      */

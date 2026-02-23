@@ -312,13 +312,26 @@ export const schedulerPublisher = inngest.createFunction(
                     const pref = await db.preference.findUnique({ where: { userId } });
                     if (!pref) return;
 
-                    // ── UNIFIED PIPELINE: All automation goes through runIntelligenceLayer ──
-                    // This is the ONLY place content generation happens.
-                    // It will: discover topic → fetch media → generate → optimize → safety check → analytics
+                    // ── DYNAMIC TOPIC GENERATION: Avoid repetition ──
+                    const recentPosts = await db.scheduledPost.findMany({
+                        where: { userId: pref.userId, status: 'published' },
+                        orderBy: { publishedAt: 'desc' },
+                        take: 10,
+                        select: { contentText: true }
+                    });
+                    const recentTopics = recentPosts.map(p => p.contentText.slice(0, 50) + "...");
+
                     const niche = pref.industryNiche || 'my industry';
                     const brand = pref.brandName || 'my brand';
                     const goals = pref.contentGoals || 'growth';
-                    const topic = `${niche} insights for ${brand}: ${goals}`;
+
+                    const topic = await AIService.generateDynamicTopic(
+                        pref.userId,
+                        niche,
+                        brand,
+                        goals,
+                        recentTopics
+                    );
 
                     let graphResult: any = null;
                     try {
@@ -326,7 +339,8 @@ export const schedulerPublisher = inngest.createFunction(
                             pref.userId,
                             topic,
                             pref.audienceType || undefined,
-                            pref.contentTone || undefined
+                            pref.contentTone || undefined,
+                            pref.preferredContentTypes?.[0] || undefined // Ensure preferred post type is passed!
                         );
                     } catch (err) {
                         console.error(`[Inngest] Intelligence pipeline failed for user ${userId}:`, err);
@@ -381,7 +395,8 @@ export const schedulerPublisher = inngest.createFunction(
                                     data: {
                                         userId: pref.userId,
                                         socialAccountId: socialAccount.id,
-                                        postType: 'TEXT',
+                                        // DYNAMIC POST TYPE based on media availability
+                                        postType: mediaUrl ? 'IMAGE_TEXT' : 'TEXT',
                                         description: platformText,
                                         targetType: 'FEED',
                                         visibility: 'PUBLIC',
@@ -397,7 +412,8 @@ export const schedulerPublisher = inngest.createFunction(
                                     userId: pref.userId,
                                     socialAccountId: socialAccount.id,
                                     platform,
-                                    postType: (pref.preferredContentTypes?.[0] || 'text_only').toUpperCase(),
+                                    // Map preference to correct DB post type
+                                    postType: mediaUrl ? 'IMAGE_TEXT' : (pref.preferredContentTypes?.[0] || 'text_only').toUpperCase(),
                                     contentText: platformText,
                                     targetType: 'FEED',
                                     status: 'pending',

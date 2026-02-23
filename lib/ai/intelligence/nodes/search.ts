@@ -46,9 +46,10 @@ export async function searchNode(state: AgentStateType) {
                         .map((a: any, i: number) => `${i + 1}. "${a.title}" — ${a.description}`)
                         .join("\n");
 
-                    // Use the most popular headline as the discovered topic
-                    discoveredTopic = validArticles[0].title;
-                    console.log(`[Discovery] NewsAPI found trending topic: "${discoveredTopic}"`);
+                    // Randomly pick one of the top 3 articles to avoid being repetitive
+                    const randomIndex = Math.floor(Math.random() * Math.min(validArticles.length, 3));
+                    discoveredTopic = validArticles[randomIndex].title;
+                    console.log(`[Discovery] NewsAPI found trending topic: "${discoveredTopic}" (index ${randomIndex})`);
                 }
             }
         } catch (err) {
