@@ -61,7 +61,22 @@ export async function creatorNode(state: AgentStateType) {
 
     // ─── Memory & past learnings ───────────────────────────────────────
     const memorySection = memory.length > 0
-        ? `\n\nPAST PERFORMANCE LEARNINGS (apply these rules strictly):\n${memory.map(m => `• ${m}`).join("\n")}`
+        ? `\n\n Before generating a post, analyze previously generated content.
+
+Ensure the new post is different in:
+
+• Topic angle  
+• Opening hook  
+• Structure  
+• Examples  
+• Insights  
+• Scenario  
+• Roadmap   
+
+If similarity is detected, deliberately shift to a new perspective, use case, or narrative style.
+
+The goal is continuous originality with consistent brand identity. 
+PAST PERFORMANCE LEARNINGS (apply these rules strictly):\n${memory.map(m => `• ${m}`).join("\n")}`
         : "";
 
     const systemPrompt = `You are an elite social media copywriter who has spent years crafting content that genuinely resonates with real people.
