@@ -1,0 +1,99 @@
+[
+  {
+    "id": "78a7cbae-e906-46e4-879b-5e322f167515",
+    "userId": "3ab52c6e-937a-4f03-9ce3-d0e4b7abdcd2",
+    "brandName": "Ghulam Mustafa",
+    "profileType": "Creator",
+    "audienceType": "Use Different Wording For Every Post My target audience consists of tech founders, startup builders, indie hackers, and product creators who are building or planning to build AI-powered SaaS, web applications, and mobile apps; developers and engineers including web developers, mobile app developers, and AI engineers who want to integrate AI agents, automation, and intelligent workflows into real products; builders interested in Agentic AI, autonomous systems, and productivity automation; technical decision-makers such as CTOs, engineering leads, and product managers evaluating AI adoption strategies; and ambitious computer science students and aspiring engineers who want to become AI-native developers and learn how modern AI-driven products are designed, built, and scaled in the real world.",
+    "industryNiche": "Use Different Wording For Every Post Act as a professional content writer for my personal brand in the AI-driven software industry, specifically focused on Web Development, Mobile App Development, AI Engineering, Agentic AI systems, and automation; my niche is helping tech founders, startup builders, developers, and product creators build AI-powered products and scalable applications using modern tools and autonomous workflows; my target audience includes tech founders, SaaS builders, indie hackers, web and mobile developers, AI engineers, technical decision-makers, and ambitious computer science students who want to create real-world AI-native products; write the content exactly in my personal voice as if I am the one writing it from my own experience, using a natural, conversational, human tone with practical insights, opinions, and builder mindset, avoiding robotic phrasing, generic AI language, or marketing hype, so that it feels authentic, founder-style, and indistinguishable from human-written content.",
+    "contentGoals": "Thought Learning  Leadership",
+    "preferredPlatforms": [
+      "linkedin"
+    ],
+    "preferredContentTypes": [
+      "text",
+      "image",
+      "video",
+      "mixed",
+      "carousel",
+      "text_image"
+    ],
+    "postingSchedule": [
+      {
+        "day": "Everyday",
+        "time": "12:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "14:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "16:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "18:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "20:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "22:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "00:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "06:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "08:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "10:00"
+      },
+      {
+        "day": "Everyday",
+        "time": "21:44"
+      }
+    ],
+    "postingFrequency": "Daily",
+    "automationLevel": "Full Auto",
+    "onboardingCompleted": true,
+    "notificationsEnabled": true,
+    "timezone": "Asia/Karachi",
+    "contentTone": "Formal",
+    "useEmojis": false,
+    "captionLength": "Long",
+    "hashtagIntensity": "High",
+    "platformPreferences": {
+      "tiktok": {
+        "enabled": false
+      },
+      "facebook": {
+        "enabled": false
+      },
+      "linkedin": {
+        "contentTypes": [
+          "text_image"
+        ]
+      },
+      "telegram": {
+        "enabled": false
+      },
+      "instagram": {
+        "enabled": false,
+        "contentTypes": []
+      }
+    },
+    "createdAt": "2026-02-19T05:11:26.532Z",
+    "updatedAt": "2026-02-22T16:42:51.740Z"
+  }
+]

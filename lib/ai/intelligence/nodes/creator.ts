@@ -32,16 +32,16 @@ export async function creatorNode(state: AgentStateType) {
     const toneInstruction = toneMap[contentTone] || toneMap.Professional;
 
     const captionLengthMap: Record<string, string> = {
-        Short: "Keep the post under 150 words.",
-        Medium: "Write 150-280 words.",
-        Long: "Write 280-500 words with detailed insights.",
+        Short: "CRITICAL: The post MUST be brief, strictly under 150 words.",
+        Medium: "CRITICAL: The post MUST be exactly 150-280 words medium length.",
+        Long: "CRITICAL: The post MUST be a detailed long-form insight taking 280-500 words.",
     };
     const lengthInstruction = captionLengthMap[captionLength] || captionLengthMap.Medium;
 
     const hashtagMap: Record<string, string> = {
-        Low: "Include 1-2 highly relevant hashtags at the end.",
-        Medium: "Include 3-5 hashtags at the end.",
-        High: "Include 6-10 trending hashtags at the end.",
+        Low: "CRITICAL: Append EXACTLY 1-2 highly relevant hashtags at the very end of the post.",
+        Medium: "CRITICAL: Append EXACTLY 3-5 relevant hashtags at the very end of the post.",
+        High: "CRITICAL: Append EXACTLY 6-10 trending hashtags at the very end of the post.",
     };
     const hashtagInstruction = hashtagMap[hashtagIntensity] || hashtagMap.Medium;
 

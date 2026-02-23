@@ -9,7 +9,7 @@ import { safeParseJson } from "@/lib/utils/json-parser";
  */
 export async function orchestratorNode(state: AgentStateType) {
   console.log("[Intelligence-Graph] Starting ORCHESTRATOR AGENT...");
-  const { rawContent, preferredPlatforms, platformPreferences, hashtagIntensity } = state;
+  const { rawContent, preferredPlatforms, platformPreferences, hashtagIntensity, captionLength } = state;
 
   if (!process.env.GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is missing");
@@ -37,23 +37,31 @@ export async function orchestratorNode(state: AgentStateType) {
 
   const llm = new ChatGroq({ model: "llama-3.3-70b-versatile", temperature: 0.2 });
 
+  const lengthPreservation = captionLength === "Long" || captionLength === "Medium"
+    ? `\nCRITICAL LENGTH REQUIREMENT: The user requested a ${captionLength} post. DO NOT summarize or shorten the RAW POST unless it strictly violates the platform's hard character limit.`
+    : "";
+
   const prompt = `You are a Social Media Platform Specialist.
 Adapt the following post for each of these platforms: ${activePlatforms.join(", ")}.
 
 RAW POST:
 ${rawContent}
+${lengthPreservation}
 
 PLATFORM RULES:
-- linkedin: Max 3000 chars. Professional. Include ${hashtagCount} hashtags. mediaRules: "Professional image or article link".
-- instagram: Max 2200 chars. Visual-first. Include ${hashtagCount} hashtags. mediaRules: "High-quality image or Reel".
-- tiktok: Max 150 chars for caption. Include ${hashtagCount} hashtags. mediaRules: "Short vertical video". 
-- facebook: Max 63206 chars. Conversational. Include ${hashtagCount} hashtags. mediaRules: "Image or video".
-- telegram: No strict limit. Informational. Optional hashtags only. mediaRules: "Image or document".
-- twitter: Max 280 chars. Punchy. 1-2 hashtags. mediaRules: "Image or GIF".
+- linkedin: Max 3000 chars. Professional. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "Professional image or article link".
+- instagram: Max 2200 chars. Visual-first. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "High-quality image or Reel".
+- tiktok: Max 150 chars for caption. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "Short vertical video". 
+- facebook: Max 63206 chars. Conversational. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "Image or video".
+- telegram: No strict limit. Informational. Optional hashtags append to text. mediaRules: "Image or document".
+- twitter: Max 280 chars. Punchy. 1-2 hashtags explicitly appended to the text. mediaRules: "Image or GIF".
 
-Only return a JSON object for the active platforms listed. Format:
+Only return a JSON object for the active platforms listed. 
+CRITICAL: The "text" field MUST contain the full final post content AND the hashtags appended at the very end. Do NOT create a separate "hashtags" array.
+
+Format:
 {
-  "platform_name": { "text": "...", "hashtags": ["#tag1"], "mediaRules": "..." }
+  "platform_name": { "text": "... [content] ... #tag1 #tag2", "mediaRules": "..." }
 }
 
 IMPORTANT: Return valid JSON only. No explanations.`;

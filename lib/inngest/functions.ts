@@ -354,7 +354,21 @@ export const schedulerPublisher = inngest.createFunction(
                     }
 
                     const platformContent: Record<string, any> = graphResult.platformContent || {};
-                    const mediaUrls: string[] = graphResult.mediaUrls || [];
+                    let mediaUrls: string[] = graphResult.mediaUrls || [];
+
+                    // ── FORCE IMAGE + TEXT FOR AUTOMATION TICK ──
+                    if (mediaUrls.length === 0) {
+                        try {
+                            const searchQuery = topic || niche || 'technology';
+                            const images = await fetchUnsplash(searchQuery);
+                            if (images && images.length > 0 && images[0].mediaUrl) {
+                                mediaUrls = [images[0].mediaUrl];
+                                console.log(`[Inngest] Fetched Unsplash image for topic "${searchQuery}": ${mediaUrls[0]}`);
+                            }
+                        } catch (err) {
+                            console.error(`[Inngest] Failed to fetch Unsplash image for automation:`, err);
+                        }
+                    }
 
                     if (pref.automationLevel === 'Semi-Auto') {
                         // Save to content queue for manual review
@@ -364,7 +378,7 @@ export const schedulerPublisher = inngest.createFunction(
                             data: {
                                 userId: pref.userId,
                                 source: 'automation',
-                                contentType: pref.preferredContentTypes?.[0] || 'text_only',
+                                contentType: mediaUrls.length > 0 ? 'image_text' : (pref.preferredContentTypes?.[0] || 'text_only'),
                                 rawContent: postText,
                                 status: 'pending',
                                 title: `Auto-generated content for review`,
