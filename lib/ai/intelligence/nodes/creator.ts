@@ -34,7 +34,7 @@ export async function creatorNode(state: AgentStateType) {
     const captionLengthMap: Record<string, string> = {
         Short: "CRITICAL: The post MUST be brief, strictly under 150 words.",
         Medium: "CRITICAL: The post MUST be exactly 150-280 words medium length.",
-        Long: "CRITICAL: The post MUST be a detailed long-form insight taking 280-500 words.",
+        Long: "CRITICAL: The post MUST be a detailed long-form insight taking 280-400 words.",
     };
     const lengthInstruction = captionLengthMap[captionLength] || captionLengthMap.Medium;
 

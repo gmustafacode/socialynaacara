@@ -49,7 +49,7 @@ ${rawContent}
 ${lengthPreservation}
 
 PLATFORM RULES:
-- linkedin: Max 3000 chars. Professional. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "Professional image or article link".
+- linkedin: Max 2950 chars (including hashtags). Professional. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "Professional image or article link".
 - instagram: Max 2200 chars. Visual-first. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "High-quality image or Reel".
 - tiktok: Max 150 chars for caption. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "Short vertical video". 
 - facebook: Max 63206 chars. Conversational. Must include ${hashtagCount} hashtags explicitly appended to the text. mediaRules: "Image or video".

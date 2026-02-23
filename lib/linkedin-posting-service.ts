@@ -118,11 +118,13 @@ export class LinkedInPostingService {
 
         if (!authorUrn) throw new Error("Could not resolve LinkedIn User/Organization ID");
 
-        // Validation
-        const description = content.description || "";
+        // Validation & Truncation
+        let description = content.description || "";
         if (description.length > 3000) {
-            throw new Error("LinkedIn description exceeds 3000 character limit");
+            console.warn(`[LinkedInPosting] Description exceeds 3000 chars (${description.length}). Truncating...`);
+            description = description.substring(0, 2997) + "...";
         }
+
         if (description.length === 0 && !content.mediaUrls?.length && !content.youtubeUrl) {
             throw new Error("Post content cannot be empty (must have text or media)");
         }
@@ -305,7 +307,14 @@ export class LinkedInPostingService {
                 if (isVideo || isArticle) {
                     const link = youtubeUrl || (hasMediaUrls ? mediaUrls![0] : "");
                     if (link && !finalDescription.includes(link)) {
-                        finalDescription = `${description}\n\n🔗 ${link}`;
+                        // Ensure appending the link doesn't exceed 3000 chars
+                        const separator = "\n\n🔗 ";
+                        const neededSpace = separator.length + link.length;
+
+                        if (finalDescription.length + neededSpace > 3000) {
+                            finalDescription = finalDescription.substring(0, 3000 - neededSpace - 3) + "...";
+                        }
+                        finalDescription = `${finalDescription}${separator}${link}`;
                     }
                 }
             } else if (isVideo || isArticle) {
